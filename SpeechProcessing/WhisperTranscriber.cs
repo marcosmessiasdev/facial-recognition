@@ -1,40 +1,41 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
+using Whisper.net;
 
 namespace SpeechProcessing;
 
-public sealed class WhisperTranscriber : IDisposable
+public sealed class WhisperTranscriber(string modelPath) : IDisposable
 {
-    private readonly Whisper.net.WhisperFactory _factory;
+    private readonly WhisperFactory _factory = WhisperFactory.FromPath(modelPath);
 
-    public WhisperTranscriber(string modelPath)
+    public void Dispose()
     {
-        _factory = Whisper.net.WhisperFactory.FromPath(modelPath);
+        _factory.Dispose();
+        GC.SuppressFinalize(this);
     }
-
-    public void Dispose() => _factory.Dispose();
 
     public async Task<string> TranscribeAsync(float[] pcm16kMono, string? language, CancellationToken ct)
     {
-        if (pcm16kMono.Length == 0) return "";
+        ArgumentNullException.ThrowIfNull(pcm16kMono);
 
-        await using var processor = _factory
+        if (pcm16kMono.Length == 0)
+        {
+            return "";
+        }
+
+        await using WhisperProcessor processor = _factory
             .CreateBuilder()
             .WithLanguage(string.IsNullOrWhiteSpace(language) ? "auto" : language)
             .Build();
 
-        var parts = new List<string>();
+        List<string> parts = new();
 
-        await foreach (var segment in processor.ProcessAsync(pcm16kMono, ct))
+        await foreach (SegmentData segment in processor.ProcessAsync(pcm16kMono, ct))
         {
             if (!string.IsNullOrWhiteSpace(segment.Text))
+            {
                 parts.Add(segment.Text.Trim());
+            }
         }
 
         return string.Join(" ", parts);
     }
 }
-

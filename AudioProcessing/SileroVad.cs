@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -52,15 +49,21 @@ public sealed class SileroVad : IDisposable
     /// <param name="modelPath">The absolute path to the silero_vad.onnx model.</param>
     public SileroVad(string modelPath)
     {
-        _session = new InferenceSession(modelPath, new SessionOptions());
+        using SessionOptions options = new();
+        _session = new InferenceSession(modelPath, options);
 
         (_audioInputName, _srInputName, _hInputName, _cInputName) = SelectInputs(_session.InputMetadata);
         (_probOutputName, _hOutputName, _cOutputName) = SelectOutputs(_session.OutputMetadata);
 
         if (_hInputName != null)
+        {
             _h = CreateZeroState(_session.InputMetadata[_hInputName].Dimensions);
+        }
+
         if (_cInputName != null)
+        {
             _c = CreateZeroState(_session.InputMetadata[_cInputName].Dimensions);
+        }
     }
 
     /// <summary>
@@ -71,41 +74,60 @@ public sealed class SileroVad : IDisposable
     /// <returns>A probability score between 0.0 and 1.0.</returns>
     public float GetSpeechProbability(float[] monoSamples, int sampleRateHz)
     {
-        if (monoSamples.Length == 0) return 0f;
+        ArgumentNullException.ThrowIfNull(monoSamples);
 
-        var inputs = new List<NamedOnnxValue>();
+        if (monoSamples.Length == 0)
+        {
+            return 0f;
+        }
 
-        var audio = new DenseTensor<float>(new[] { 1, monoSamples.Length });
+        List<NamedOnnxValue> inputs = new();
+
+        DenseTensor<float> audio = new([1, monoSamples.Length]);
         for (int i = 0; i < monoSamples.Length; i++)
+        {
             audio[0, i] = monoSamples[i];
+        }
+
         inputs.Add(NamedOnnxValue.CreateFromTensor(_audioInputName, audio));
 
         if (_srInputName != null)
         {
-            var sr = new DenseTensor<long>(new[] { 1 });
+            DenseTensor<long> sr = new([1]);
             sr[0] = sampleRateHz;
             inputs.Add(NamedOnnxValue.CreateFromTensor(_srInputName, sr));
         }
 
         if (_hInputName != null && _h != null)
+        {
             inputs.Add(NamedOnnxValue.CreateFromTensor(_hInputName, _h));
-        if (_cInputName != null && _c != null)
-            inputs.Add(NamedOnnxValue.CreateFromTensor(_cInputName, _c));
+        }
 
-        using var results = _session.Run(inputs);
+        if (_cInputName != null && _c != null)
+        {
+            inputs.Add(NamedOnnxValue.CreateFromTensor(_cInputName, _c));
+        }
+
+        using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
 
         float prob = results.First(r => r.Name == _probOutputName).AsEnumerable<float>().FirstOrDefault();
 
         if (_hOutputName != null && _h != null)
         {
-            var nextH = results.FirstOrDefault(r => r.Name == _hOutputName)?.AsTensor<float>();
-            if (nextH != null) _h = Clone(nextH);
+            Tensor<float>? nextH = results.FirstOrDefault(r => r.Name == _hOutputName)?.AsTensor<float>();
+            if (nextH != null)
+            {
+                _h = Clone(nextH);
+            }
         }
 
         if (_cOutputName != null && _c != null)
         {
-            var nextC = results.FirstOrDefault(r => r.Name == _cOutputName)?.AsTensor<float>();
-            if (nextC != null) _c = Clone(nextC);
+            Tensor<float>? nextC = results.FirstOrDefault(r => r.Name == _cOutputName)?.AsTensor<float>();
+            if (nextC != null)
+            {
+                _c = Clone(nextC);
+            }
         }
 
         return prob;
@@ -117,9 +139,14 @@ public sealed class SileroVad : IDisposable
     public void ResetState()
     {
         if (_hInputName != null)
+        {
             _h = CreateZeroState(_session.InputMetadata[_hInputName].Dimensions);
+        }
+
         if (_cInputName != null)
+        {
             _c = CreateZeroState(_session.InputMetadata[_cInputName].Dimensions);
+        }
     }
 
     /// <summary>
@@ -134,28 +161,37 @@ public sealed class SileroVad : IDisposable
         string? h = null;
         string? c = null;
 
-        foreach (var kvp in inputs)
+        foreach (KeyValuePair<string, NodeMetadata> kvp in inputs)
         {
-            var name = kvp.Key;
-            var meta = kvp.Value;
-            var dims = meta.Dimensions;
+            string name = kvp.Key;
+            NodeMetadata meta = kvp.Value;
+            int[] dims = meta.Dimensions;
 
             if (meta.ElementType == typeof(float) && dims.Length == 2 && (dims[0] == 1 || dims[0] <= 0))
+            {
                 audio ??= name;
+            }
             else if (meta.ElementType == typeof(long))
+            {
                 sr ??= name;
+            }
             else if (meta.ElementType == typeof(float) && dims.Length == 3)
             {
                 // LSTM state tensors usually look like [2, 1, 64] or similar.
-                if (h == null) h = name;
-                else if (c == null) c = name;
+                if (h == null)
+                {
+                    h = name;
+                }
+                else
+                {
+                    c ??= name;
+                }
             }
         }
 
-        if (audio == null)
-            throw new InvalidOperationException("Silero VAD input not recognized: expected a float audio tensor input [1, T].");
-
-        return (audio, sr, h, c);
+        return audio == null
+            ? throw new InvalidOperationException("Silero VAD input not recognized: expected a float audio tensor input [1, T].")
+            : (audio, sr, h, c);
     }
 
     private static (string prob, string? hOut, string? cOut) SelectOutputs(IReadOnlyDictionary<string, NodeMetadata> outputs)
@@ -164,18 +200,26 @@ public sealed class SileroVad : IDisposable
         string? h = null;
         string? c = null;
 
-        foreach (var kvp in outputs)
+        foreach (KeyValuePair<string, NodeMetadata> kvp in outputs)
         {
-            var name = kvp.Key;
-            var meta = kvp.Value;
-            var dims = meta.Dimensions;
+            string name = kvp.Key;
+            NodeMetadata meta = kvp.Value;
+            int[] dims = meta.Dimensions;
 
             if (meta.ElementType == typeof(float) && dims.Length == 2 && (dims[0] == 1 || dims[0] <= 0))
+            {
                 prob ??= name;
+            }
             else if (meta.ElementType == typeof(float) && dims.Length == 3)
             {
-                if (h == null) h = name;
-                else if (c == null) c = name;
+                if (h == null)
+                {
+                    h = name;
+                }
+                else
+                {
+                    c ??= name;
+                }
             }
         }
 
@@ -185,19 +229,21 @@ public sealed class SileroVad : IDisposable
 
     private static DenseTensor<float> CreateZeroState(int[] dims)
     {
-        var normalized = dims.Select(d => d <= 0 ? 1 : d).ToArray();
+        int[] normalized = dims.Select(d => d <= 0 ? 1 : d).ToArray();
         return new DenseTensor<float>(normalized);
     }
 
     private static DenseTensor<float> Clone(Tensor<float> t)
     {
-        var dims = t.Dimensions.ToArray();
-        var clone = new DenseTensor<float>(dims);
+        int[] dims = t.Dimensions.ToArray();
+        DenseTensor<float> clone = new(dims);
         int i = 0;
-        foreach (var v in t)
+        foreach (float v in t)
+        {
             clone.Buffer.Span[i++] = v;
+        }
+
         return clone;
     }
 }
-
 

@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using FaceDetection;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
@@ -23,28 +19,31 @@ public sealed class FaceMeshLandmarker : IDisposable
 
     private readonly InferenceSession _session;
     private readonly string _imageInputName;
-    private readonly IReadOnlyList<(string Name, Type ElementType, int[] Dims)> _extraInputs;
+    private readonly (string Name, Type ElementType, int[] Dims)[] _extraInputs;
     private readonly string _landmarksOutputName;
 
     public FaceMeshLandmarker(string modelPath)
     {
-        var opts = new SessionOptions();
+        using SessionOptions opts = new();
         _session = new InferenceSession(modelPath, opts);
 
         _imageInputName = _session.InputMetadata
             .First(kvp => kvp.Value.Dimensions.Length == 4)
             .Key;
 
-        _extraInputs = _session.InputMetadata
+        _extraInputs = [.. _session.InputMetadata
             .Where(kvp => kvp.Key != _imageInputName)
-            .Select(kvp => (kvp.Key, kvp.Value.ElementType, kvp.Value.Dimensions))
-            .ToArray();
+            .Select(kvp => (kvp.Key, kvp.Value.ElementType, kvp.Value.Dimensions))];
 
         _landmarksOutputName = _session.OutputMetadata.Keys.FirstOrDefault(k => k.Contains("landmark", StringComparison.OrdinalIgnoreCase))
             ?? _session.OutputMetadata.Keys.First();
     }
 
-    public void Dispose() => _session.Dispose();
+    public void Dispose()
+    {
+        _session.Dispose();
+        GC.SuppressFinalize(this);
+    }
 
     /// <summary>
     /// Computes mouth open ratio and a mouth ROI inside the given face crop.
@@ -54,33 +53,55 @@ public sealed class FaceMeshLandmarker : IDisposable
         mouthOpenRatio = 0f;
         mouthRoi = default;
 
-        if (faceCropBgrOrBgra.Empty()) return false;
+        ArgumentNullException.ThrowIfNull(faceCropBgrOrBgra);
 
-        using var bgr = EnsureBgr(faceCropBgrOrBgra);
-        using var resized = new Mat();
+        if (faceCropBgrOrBgra.Empty())
+        {
+            return false;
+        }
+
+        using Mat bgr = EnsureBgr(faceCropBgrOrBgra);
+        using Mat resized = new();
         Cv2.Resize(bgr, resized, new Size(InputSize, InputSize));
 
-        var input = BuildInputTensorRgb01(resized);
+        DenseTensor<float> input = BuildInputTensorRgb01(resized);
 
-        var inputs = new List<NamedOnnxValue>(_extraInputs.Count + 1)
+        List<NamedOnnxValue> inputs = new(_extraInputs.Length + 1)
         {
             NamedOnnxValue.CreateFromTensor(_imageInputName, input)
         };
 
         // Best-effort support for "postprocess" models that require crop parameters.
-        foreach (var (name, elementType, dims) in _extraInputs)
+        foreach ((string? name, Type? elementType, int[]? dims) in _extraInputs)
         {
             inputs.Add(ScalarTensorFor(name, elementType, dims));
         }
 
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
-        var output = results.FirstOrDefault(r => r.Name == _landmarksOutputName) ?? results.First();
+        DisposableNamedOnnxValue? output = null;
+        foreach (DisposableNamedOnnxValue r in results)
+        {
+            output ??= r;
+            if (string.Equals(r.Name, _landmarksOutputName, StringComparison.Ordinal))
+            {
+                output = r;
+                break;
+            }
+        }
 
-        var (pUpper, pLower, pLeft, pRight) = ExtractMouthPoints(output);
+        if (output == null)
+        {
+            return false;
+        }
+
+        (Pt pUpper, Pt pLower, Pt pLeft, Pt pRight) = ExtractMouthPoints(output);
 
         float open = Distance(pUpper, pLower);
         float width = Distance(pLeft, pRight);
-        if (width <= 1e-6f) return false;
+        if (width <= 1e-6f)
+        {
+            return false;
+        }
 
         mouthOpenRatio = open / width;
 
@@ -91,10 +112,10 @@ public sealed class FaceMeshLandmarker : IDisposable
         float roiW = mouthW * 1.8f;
         float roiH = mouthW * 1.2f;
 
-        var rx = (int)MathF.Round(cx - roiW / 2f);
-        var ry = (int)MathF.Round(cy - roiH / 2f);
-        var rw = (int)MathF.Round(roiW);
-        var rh = (int)MathF.Round(roiH);
+        int rx = (int)MathF.Round(cx - (roiW / 2f));
+        int ry = (int)MathF.Round(cy - (roiH / 2f));
+        int rw = (int)MathF.Round(roiW);
+        int rh = (int)MathF.Round(roiH);
 
         rx = Math.Clamp(rx, 0, InputSize - 1);
         ry = Math.Clamp(ry, 0, InputSize - 1);
@@ -125,28 +146,36 @@ public sealed class FaceMeshLandmarker : IDisposable
 
     private static Mat EnsureBgr(Mat input)
     {
-        if (input.Channels() == 3) return input;
+        if (input.Channels() == 3)
+        {
+            return input;
+        }
 
-        var bgr = new Mat();
+        Mat bgr = new();
         if (input.Channels() == 4)
+        {
             Cv2.CvtColor(input, bgr, ColorConversionCodes.BGRA2BGR);
+        }
         else
+        {
             Cv2.CvtColor(input, bgr, ColorConversionCodes.GRAY2BGR);
+        }
+
         return bgr;
     }
 
     private static DenseTensor<float> BuildInputTensorRgb01(Mat bgr192)
     {
         // Convert to RGB and normalize to [0..1]. Shape: [1, 3, 192, 192]
-        using var rgb = new Mat();
+        using Mat rgb = new();
         Cv2.CvtColor(bgr192, rgb, ColorConversionCodes.BGR2RGB);
 
-        var tensor = new DenseTensor<float>(new[] { 1, 3, InputSize, InputSize });
+        DenseTensor<float> tensor = new([1, 3, InputSize, InputSize]);
         for (int y = 0; y < InputSize; y++)
         {
             for (int x = 0; x < InputSize; x++)
             {
-                var px = rgb.At<Vec3b>(y, x);
+                Vec3b px = rgb.At<Vec3b>(y, x);
                 tensor[0, 0, y, x] = px.Item0 / 255f;
                 tensor[0, 1, y, x] = px.Item1 / 255f;
                 tensor[0, 2, y, x] = px.Item2 / 255f;
@@ -164,30 +193,30 @@ public sealed class FaceMeshLandmarker : IDisposable
             name.Contains("y2", StringComparison.OrdinalIgnoreCase) ? InputSize :
             0f;
 
-        var shape = dims.Length == 0 ? new[] { 1 } : dims.Select(d => d > 0 ? d : 1).ToArray();
+        int[] shape = dims.Length == 0 ? [1] : dims.Select(d => d > 0 ? d : 1).ToArray();
 
         if (elementType == typeof(float))
         {
-            var t = new DenseTensor<float>(shape);
+            DenseTensor<float> t = new(shape);
             t.Buffer.Span[0] = v;
             return NamedOnnxValue.CreateFromTensor(name, t);
         }
 
         if (elementType == typeof(int))
         {
-            var t = new DenseTensor<int>(shape);
+            DenseTensor<int> t = new(shape);
             t.Buffer.Span[0] = (int)MathF.Round(v);
             return NamedOnnxValue.CreateFromTensor(name, t);
         }
 
         if (elementType == typeof(long))
         {
-            var t = new DenseTensor<long>(shape);
+            DenseTensor<long> t = new(shape);
             t.Buffer.Span[0] = (long)MathF.Round(v);
             return NamedOnnxValue.CreateFromTensor(name, t);
         }
 
-        var tf = new DenseTensor<float>(shape);
+        DenseTensor<float> tf = new(shape);
         tf.Buffer.Span[0] = v;
         return NamedOnnxValue.CreateFromTensor(name, tf);
     }
@@ -234,12 +263,12 @@ public sealed class FaceMeshLandmarker : IDisposable
         }
 
         // Fallback: attempt to materialize as float via ToArray (last resort).
-        var arr = output.AsEnumerable<float>().ToArray();
+        float[] arr = output.AsEnumerable<float>().ToArray();
         int stride = 3;
-        int idxU = (MouthUpperInner * stride);
-        int idxL = (MouthLowerInner * stride);
-        int idxLC = (MouthLeftCorner * stride);
-        int idxRC = (MouthRightCorner * stride);
+        int idxU = MouthUpperInner * stride;
+        int idxL = MouthLowerInner * stride;
+        int idxLC = MouthLeftCorner * stride;
+        int idxRC = MouthRightCorner * stride;
         return (
             new Pt(arr[idxU + 0], arr[idxU + 1]),
             new Pt(arr[idxL + 0], arr[idxL + 1]),
@@ -251,6 +280,6 @@ public sealed class FaceMeshLandmarker : IDisposable
     {
         float dx = a.X - b.X;
         float dy = a.Y - b.Y;
-        return MathF.Sqrt(dx * dx + dy * dy);
+        return MathF.Sqrt((dx * dx) + (dy * dy));
     }
 }

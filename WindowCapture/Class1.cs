@@ -1,4 +1,4 @@
-﻿namespace WindowCapture;
+namespace WindowCapture;
 
 public class Class1
 {

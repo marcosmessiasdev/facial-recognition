@@ -1,20 +1,16 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace SpeechProcessing;
 
 /// <summary>
 /// Collects 16kHz mono PCM frames into speech segments using a boolean VAD signal.
 /// </summary>
-public sealed class VadSegmenter : IDisposable
+public sealed class VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350, int maxSegmentSeconds = 15) : IDisposable
 {
     private readonly object _sync = new();
-    private readonly int _sampleRateHz;
-    private readonly TimeSpan _hangover;
-    private readonly TimeSpan _maxSegment;
+    private readonly int _sampleRateHz = sampleRateHz;
+    private readonly TimeSpan _hangover = TimeSpan.FromMilliseconds(Math.Clamp(hangoverMs, 0, 2000));
+    private readonly TimeSpan _maxSegment = TimeSpan.FromSeconds(Math.Clamp(maxSegmentSeconds, 2, 60));
 
     private readonly ConcurrentQueue<(float[] Samples, TimeSpan Time)> _queue = new();
     private CancellationTokenSource? _cts;
@@ -27,18 +23,15 @@ public sealed class VadSegmenter : IDisposable
 
     public event EventHandler<(TimeSpan Start, TimeSpan End, float[] Samples)>? SegmentReady;
 
-    public VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350, int maxSegmentSeconds = 15)
-    {
-        _sampleRateHz = sampleRateHz;
-        _hangover = TimeSpan.FromMilliseconds(Math.Clamp(hangoverMs, 0, 2000));
-        _maxSegment = TimeSpan.FromSeconds(Math.Clamp(maxSegmentSeconds, 2, 60));
-    }
-
     public void Start()
     {
         lock (_sync)
         {
-            if (_cts != null) return;
+            if (_cts != null)
+            {
+                return;
+            }
+
             _cts = new CancellationTokenSource();
             _pumpTask = Task.Run(() => PumpAsync(_cts.Token), _cts.Token);
         }
@@ -51,11 +44,13 @@ public sealed class VadSegmenter : IDisposable
             _cts?.Cancel();
         }
 
-        try { _pumpTask?.Wait(TimeSpan.FromSeconds(1)); } catch { /* ignore */ }
+        try { _ = (_pumpTask?.Wait(TimeSpan.FromSeconds(1))); } catch { /* ignore */ }
     }
 
     public void Push(float[] samples, TimeSpan timestamp, bool speechActive)
     {
+        ArgumentNullException.ThrowIfNull(samples);
+
         // Keep this lock-free for the capture thread.
         _queue.Enqueue((samples, timestamp));
 
@@ -76,20 +71,20 @@ public sealed class VadSegmenter : IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            if (!_queue.TryDequeue(out var item))
+            if (!_queue.TryDequeue(out (float[] Samples, TimeSpan Time) item))
             {
                 await Task.Delay(10, ct);
                 continue;
             }
 
-            var (samples, time) = item;
-            var seg = _segment;
+            (float[]? samples, TimeSpan time) = item;
+            List<float>? seg = _segment;
             if (seg != null)
             {
                 seg.AddRange(samples);
 
-                var segDur = time - _segmentStart;
-                var silentFor = time - _lastSpeechTime;
+                TimeSpan segDur = time - _segmentStart;
+                TimeSpan silentFor = time - _lastSpeechTime;
 
                 if (segDur >= _maxSegment || (silentFor >= _hangover && _inSpeech))
                 {
@@ -97,7 +92,7 @@ public sealed class VadSegmenter : IDisposable
                     _inSpeech = false;
                     _segment = null;
 
-                    var pcm = seg.ToArray();
+                    float[] pcm = seg.ToArray();
                     SegmentReady?.Invoke(this, (_segmentStart, time, pcm));
                 }
             }
@@ -111,4 +106,3 @@ public sealed class VadSegmenter : IDisposable
         _cts = null;
     }
 }
-

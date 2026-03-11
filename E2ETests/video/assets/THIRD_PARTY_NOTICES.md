@@ -13,10 +13,9 @@ Downloaded as 512px thumbnails from Wikimedia Commons:
 
 ## Audio (speech)
 
-- `speech.ogg` — source file: `File:En-us-hello.ogg` (Wikimedia Commons; public domain/self)
+- `speech.ogg` — source file: `File:En-us-introduction.ogg` (Wikimedia Commons; public domain/self)
 
 ## Notes
 
 - These assets are only used for automated E2E tests and offline demos.
 - If you redistribute this repository, verify licenses on the linked Wikimedia file pages.
-

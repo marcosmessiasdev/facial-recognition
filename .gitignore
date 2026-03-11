@@ -34,3 +34,6 @@ TestResults/
 ## OS specific
 .DS_Store
 Thumbs.db
+*_wpftmp.csproj
+build.txt
+build_errors.txt

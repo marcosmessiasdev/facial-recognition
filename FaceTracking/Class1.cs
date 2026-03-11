@@ -1,4 +1,4 @@
-﻿namespace FaceTracking;
+namespace FaceTracking;
 
 public class Class1
 {

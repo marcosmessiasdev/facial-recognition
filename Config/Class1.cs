@@ -1,4 +1,4 @@
-﻿namespace Config;
+namespace Config;
 
 public class Class1
 {

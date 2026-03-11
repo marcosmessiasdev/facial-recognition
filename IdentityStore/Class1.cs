@@ -1,4 +1,4 @@
-﻿namespace IdentityStore;
+namespace IdentityStore;
 
 public class Class1
 {

@@ -1,0 +1,206 @@
+########################################
+# ROOT
+########################################
+root = true
+
+########################################
+# GLOBAL (todos os arquivos)
+########################################
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+########################################
+# C# FILES
+########################################
+[*.cs]
+
+########################################
+# MICROSOFT C# CODE STYLE (.NET 8 / C# 12)
+########################################
+
+# Braces obrigatórias em estruturas de controle
+csharp_prefer_braces = true:error
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+
+# Pattern matching moderno
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+
+# Null-safety
+csharp_style_throw_expression = true:suggestion
+csharp_style_conditional_delegate_call = true:suggestion
+
+# Modifier order (Microsoft)
+csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
+
+########################################
+# GOVERNANÇA GERAL
+########################################
+dotnet_nullable_reference_types = true
+dotnet_analyzer_diagnostic.severity = error
+
+########################################
+# NAMESPACE — PADRÃO ÚNICO (MICROSOFT)
+########################################
+# Namespace SEM chaves, com ';'
+csharp_style_namespace_declarations = file_scoped:error
+dotnet_diagnostic.IDE0160.severity = error
+
+########################################
+# MICROSOFT ANALYZERS — ATIVOS
+########################################
+dotnet_diagnostic.IDE0011.severity = error
+dotnet_diagnostic.IDE0058.severity = error
+dotnet_diagnostic.IDE0037.severity = error
+dotnet_diagnostic.IDE0270.severity = error
+dotnet_diagnostic.IDE0305.severity = error
+dotnet_diagnostic.IDE0090.severity = error
+dotnet_diagnostic.IDE0046.severity = error
+dotnet_diagnostic.IDE0072.severity = error
+dotnet_diagnostic.IDE0078.severity = error
+
+# Formatter não bloqueia build
+dotnet_diagnostic.IDE0055.severity = none
+
+########################################
+# DESABILITAR APENAS RUÍDO REAL DO IDE
+########################################
+dotnet_diagnostic.IDE0022.severity = none
+dotnet_diagnostic.IDE0028.severity = none
+
+########################################
+# .NET CODE ANALYSIS (CA)
+########################################
+dotnet_diagnostic.CA1062.severity = error
+dotnet_diagnostic.CA1812.severity = error
+dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA1822.severity = error
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA1848.severity = error
+dotnet_diagnostic.CA1307.severity = error
+dotnet_diagnostic.CA1309.severity = error
+
+# CA1054/CA1056 (Uri-as-string) geram falso positivo em modelos persistidos/DTOs.
+# Para URL/URI, armazenamos como string e validamos nas bordas (API/UI), evitando acoplamento de EF/serialização a System.Uri.
+dotnet_diagnostic.CA1054.severity = none
+dotnet_diagnostic.CA1056.severity = none
+
+# SA1309 entra em conflito com convenção Microsoft de campos privados (ex.: _logger).
+dotnet_diagnostic.SA1309.severity = none
+
+# SonarQube — False positives for JSON deserialization DTOs
+dotnet_diagnostic.S1144.severity = none
+dotnet_diagnostic.S3459.severity = none
+
+########################################
+# STYLECOP — DOCUMENTAÇÃO
+########################################
+dotnet_diagnostic.SA1600.severity = error
+dotnet_diagnostic.SA1602.severity = error
+dotnet_diagnostic.SA1611.severity = error
+dotnet_diagnostic.SA1633.severity = none
+
+########################################
+# STYLECOP — ORGANIZAÇÃO
+########################################
+dotnet_diagnostic.SA1200.severity = error
+dotnet_diagnostic.SA1201.severity = error
+dotnet_diagnostic.SA1202.severity = error
+dotnet_diagnostic.SA1203.severity = error
+dotnet_diagnostic.SA1204.severity = error
+dotnet_diagnostic.SA1210.severity = error
+dotnet_diagnostic.SA1503.severity = error
+dotnet_diagnostic.SA1514.severity = error
+dotnet_diagnostic.S1192.severity = error
+
+########################################
+# STYLECOP — DESABILITADAS (C# MODERNO)
+########################################
+dotnet_diagnostic.SA1003.severity = none
+dotnet_diagnostic.SA1010.severity = none
+dotnet_diagnostic.SA1013.severity = none
+dotnet_diagnostic.SA1101.severity = none
+dotnet_diagnostic.SA1507.severity = none
+
+########################################
+# ROSLYNATOR — CONFLITOS DESATIVADOS
+########################################
+dotnet_diagnostic.RCS1002.severity = none
+dotnet_diagnostic.RCS1036.severity = none
+dotnet_diagnostic.RCS1141.severity = none
+dotnet_diagnostic.RCS1203.severity = none
+dotnet_diagnostic.RCS1213.severity = none
+dotnet_diagnostic.RCS1220.severity = none
+
+########################################
+# ROSLYNATOR — VALOR REAL
+########################################
+dotnet_diagnostic.RCS1047.severity = error
+dotnet_diagnostic.RCS1077.severity = error
+dotnet_diagnostic.RCS1081.severity = error
+dotnet_diagnostic.RCS1090.severity = error
+dotnet_diagnostic.RCS1124.severity = error
+dotnet_diagnostic.RCS1102.severity = error
+dotnet_diagnostic.RCS1118.severity = error
+dotnet_diagnostic.RCS1155.severity = error
+dotnet_diagnostic.RCS1170.severity = error
+dotnet_diagnostic.RCS1181.severity = error
+
+########################################
+# CONTROLLERS — CancellationToken é padrão ASP.NET
+########################################
+[**/Migrations/*.cs]
+# EF Core migrations são código gerado; muitas APIs retornam builders cujo valor é ignorado por design.
+dotnet_diagnostic.IDE0058.severity = none
+dotnet_diagnostic.S1192.severity = none
+
+[**/Controllers/**/*.cs]
+dotnet_diagnostic.SA1611.severity = none
+dotnet_diagnostic.CS1573.severity = none
+
+########################################
+# TEST PROJECTS — FLEXIBILIZAÇÃO CONTROLADA
+########################################
+[**/*Tests/**/*.cs]
+
+dotnet_diagnostic.SA1600.severity = none
+dotnet_diagnostic.SA1602.severity = none
+dotnet_diagnostic.SA1611.severity = none
+dotnet_diagnostic.CS1591.severity = none
+
+dotnet_diagnostic.CA1062.severity = none
+dotnet_diagnostic.CA1040.severity = none
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1822.severity = none
+dotnet_diagnostic.CA2000.severity = none
+dotnet_diagnostic.CA2007.severity = none
+
+dotnet_diagnostic.SA1003.severity = none
+dotnet_diagnostic.SA1010.severity = none
+dotnet_diagnostic.SA1013.severity = none
+dotnet_diagnostic.IDE0055.severity = none
+
+dotnet_diagnostic.RCS1047.severity = none
+dotnet_diagnostic.RCS1077.severity = none
+dotnet_diagnostic.RCS1124.severity = none
+
+########################################
+# FIXTURES - DUMMY CODE FOR INDEXING
+########################################
+[**/tests/Fixtures/**/*.cs]
+dotnet_analyzer_diagnostic.severity = none
+dotnet_diagnostic.SA1600.severity = none
+dotnet_diagnostic.SA1649.severity = none
+dotnet_diagnostic.SA1402.severity = none
+dotnet_diagnostic.CA1812.severity = none
+dotnet_diagnostic.S3881.severity = none
+dotnet_diagnostic.CA2100.severity = none
+dotnet_diagnostic.SA1616.severity = none

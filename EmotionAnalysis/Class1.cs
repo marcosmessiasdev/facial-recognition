@@ -1,4 +1,4 @@
-﻿namespace EmotionAnalysis;
+namespace EmotionAnalysis;
 
 public class Class1
 {

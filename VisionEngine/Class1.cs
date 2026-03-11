@@ -1,4 +1,4 @@
-﻿namespace VisionEngine;
+namespace VisionEngine;
 
 public class Class1
 {

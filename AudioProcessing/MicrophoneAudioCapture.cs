@@ -1,7 +1,4 @@
-using System;
 using System.Diagnostics;
-using System.Threading;
-using System.Threading.Tasks;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
@@ -32,8 +29,9 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
 
     public MicrophoneAudioCapture(int targetSampleRateHz = 16000, int frameSizeSamples = 512, string? deviceSelector = null)
     {
-        if (targetSampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(targetSampleRateHz));
-        if (frameSizeSamples <= 0) throw new ArgumentOutOfRangeException(nameof(frameSizeSamples));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(targetSampleRateHz);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(frameSizeSamples);
+
         TargetSampleRateHz = targetSampleRateHz;
         FrameSizeSamples = frameSizeSamples;
         _deviceSelector = string.IsNullOrWhiteSpace(deviceSelector) ? null : deviceSelector.Trim();
@@ -43,9 +41,12 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
     {
         lock (_sync)
         {
-            if (_capture != null) return;
+            if (_capture != null)
+            {
+                return;
+            }
 
-            var device = ResolveDevice(_deviceSelector);
+            MMDevice? device = ResolveDevice(_deviceSelector);
             SelectedDeviceName = device?.FriendlyName;
             _capture = device != null ? new WasapiCapture(device) : new WasapiCapture();
             _buffered = new BufferedWaveProvider(_capture.WaveFormat)
@@ -56,7 +57,7 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
             _capture.DataAvailable += OnDataAvailable;
             _capture.RecordingStopped += OnStopped;
 
-            var sample = _buffered.ToSampleProvider();
+            ISampleProvider sample = _buffered.ToSampleProvider();
 
             if (sample.WaveFormat.Channels == 2)
             {
@@ -68,7 +69,7 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
             }
             else if (sample.WaveFormat.Channels > 2)
             {
-                sample = new MultiplexingSampleProvider(new[] { sample }, 1);
+                sample = new MultiplexingSampleProvider([sample], 1);
             }
 
             if (sample.WaveFormat.SampleRate != TargetSampleRateHz)
@@ -89,19 +90,33 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
     {
         try
         {
-            using var enumerator = new MMDeviceEnumerator();
-            var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+            using MMDeviceEnumerator enumerator = new();
+            MMDeviceCollection devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
 
             if (!string.IsNullOrWhiteSpace(selector))
             {
-                var byId = devices.FirstOrDefault(d => string.Equals(d.ID, selector, StringComparison.OrdinalIgnoreCase));
-                if (byId != null) return byId;
+                MMDevice? byId = devices.FirstOrDefault(d => string.Equals(d.ID, selector, StringComparison.OrdinalIgnoreCase));
+                if (byId != null)
+                {
+                    return byId;
+                }
 
-                var byName = devices.FirstOrDefault(d => d.FriendlyName.Contains(selector, StringComparison.OrdinalIgnoreCase));
-                if (byName != null) return byName;
+                MMDevice? byName = devices.FirstOrDefault(d => d.FriendlyName.Contains(selector, StringComparison.OrdinalIgnoreCase));
+                if (byName != null)
+                {
+                    return byName;
+                }
             }
 
-            return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
+            // Prefer the "communications" device for meetings; fall back to multimedia.
+            try
+            {
+                return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+            }
+            catch
+            {
+                return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
+            }
         }
         catch
         {
@@ -109,19 +124,29 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
         }
     }
 
-    public void Stop()
+    public void StopCapture()
     {
         lock (_sync)
         {
-            if (_capture == null) return;
+            if (_capture == null)
+            {
+                return;
+            }
+
             try { _capture.StopRecording(); } catch { /* ignore */ }
         }
     }
 
+    // Back-compat
+    public void Stop() => StopCapture();
+
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
-        var buffered = _buffered;
-        if (buffered == null) return;
+        BufferedWaveProvider? buffered = _buffered;
+        if (buffered == null)
+        {
+            return;
+        }
 
         try
         {
@@ -146,7 +171,7 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
 
     private async Task PumpAsync(CancellationToken ct)
     {
-        var buffer = new float[FrameSizeSamples];
+        float[] buffer = new float[FrameSizeSamples];
 
         while (!ct.IsCancellationRequested)
         {
@@ -164,7 +189,7 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
                 continue;
             }
 
-            int read = 0;
+            int read;
             try
             {
                 read = pipeline.Read(buffer, 0, buffer.Length);
@@ -181,7 +206,7 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
                 continue;
             }
 
-            var samples = new float[buffer.Length];
+            float[] samples = new float[buffer.Length];
             Array.Copy(buffer, samples, buffer.Length);
             FrameArrived?.Invoke(this, new AudioFrameEventArgs(samples, TargetSampleRateHz, sw.Elapsed));
         }
@@ -194,7 +219,7 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
             _cts?.Cancel();
         }
 
-        try { _pumpTask?.Wait(TimeSpan.FromSeconds(1)); } catch { /* ignore */ }
+        try { _ = (_pumpTask?.Wait(TimeSpan.FromSeconds(1))); } catch { /* ignore */ }
 
         lock (_sync)
         {
@@ -212,4 +237,3 @@ public sealed class MicrophoneAudioCapture : IAudioCapture
         }
     }
 }
-

@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using FaceTracking;
 
 namespace SpeakerDetection;
@@ -34,6 +31,7 @@ public sealed class ActiveSpeakerDetector
 {
     private readonly float _minMouthScore;
     private readonly float _minMouthScoreVisualOnly;
+    private readonly float _minTalkNetProb;
     private readonly TimeSpan _holdTime;
 
     private int? _activeTrackId;
@@ -45,10 +43,11 @@ public sealed class ActiveSpeakerDetector
     /// <param name="minMouthScore">The minimum motion score required to consider someone as speaking.</param>
     /// <param name="minMouthScoreVisualOnly">A higher threshold used when audio VAD is unavailable or inactive.</param>
     /// <param name="holdMs">Duration (in milliseconds) to stay active after a speaker stops moving their mouth.</param>
-    public ActiveSpeakerDetector(float minMouthScore = 0.015f, float minMouthScoreVisualOnly = 0.03f, int holdMs = 400)
+    public ActiveSpeakerDetector(float minMouthScore = 0.015f, float minMouthScoreVisualOnly = 0.03f, float minTalkNetProb = 0.55f, int holdMs = 400)
     {
         _minMouthScore = Math.Max(0f, minMouthScore);
         _minMouthScoreVisualOnly = Math.Max(_minMouthScore, minMouthScoreVisualOnly);
+        _minTalkNetProb = Math.Clamp(minTalkNetProb, 0.05f, 0.99f);
         _holdTime = TimeSpan.FromMilliseconds(Math.Max(0, holdMs));
     }
 
@@ -62,28 +61,69 @@ public sealed class ActiveSpeakerDetector
     /// <returns>The ID of the active speaker, or null if nobody is speaking.</returns>
     public int? Update(IReadOnlyList<Track> tracks, bool speechActive, bool allowVisualOnlyFallback, DateTime nowUtc)
     {
-        foreach (var t in tracks)
+        ArgumentNullException.ThrowIfNull(tracks);
+
+        foreach (Track t in tracks)
+        {
             t.SpeakingScore = 0f;
+        }
 
         if (!speechActive && !allowVisualOnlyFallback)
         {
             if (_activeTrackId != null && nowUtc <= _activeUntilUtc)
+            {
                 return _activeTrackId;
+            }
 
             _activeTrackId = null;
             return null;
         }
 
-        var min = speechActive ? _minMouthScore : _minMouthScoreVisualOnly;
-
-        var total = tracks.Sum(t => t.MouthMotionScore);
-        if (total > 1e-6f)
+        bool hasTalkNet = tracks.Any(t => t.TalkNetSpeakingProb > 1e-6f);
+        if (hasTalkNet)
         {
-            foreach (var t in tracks)
-                t.SpeakingScore = t.MouthMotionScore / total;
+            float totalProb = tracks.Sum(t => t.TalkNetSpeakingProb);
+            if (totalProb > 1e-6f)
+            {
+                foreach (Track t in tracks)
+                {
+                    t.SpeakingScore = t.TalkNetSpeakingProb / totalProb;
+                }
+            }
+
+            Track? bestProb = tracks
+                .Where(t => t.TalkNetSpeakingProb >= _minTalkNetProb)
+                .OrderByDescending(t => t.TalkNetSpeakingProb)
+                .FirstOrDefault();
+
+            if (bestProb == null)
+            {
+                if (_activeTrackId != null && nowUtc <= _activeUntilUtc)
+                {
+                    return _activeTrackId;
+                }
+
+                _activeTrackId = null;
+                return null;
+            }
+
+            _activeTrackId = bestProb.Id;
+            _activeUntilUtc = nowUtc + _holdTime;
+            return _activeTrackId;
         }
 
-        var best = tracks
+        float min = speechActive ? _minMouthScore : _minMouthScoreVisualOnly;
+
+        float total = tracks.Sum(t => t.MouthMotionScore);
+        if (total > 1e-6f)
+        {
+            foreach (Track t in tracks)
+            {
+                t.SpeakingScore = t.MouthMotionScore / total;
+            }
+        }
+
+        Track? best = tracks
             .Where(t => t.MouthMotionScore >= min)
             .OrderByDescending(t => t.MouthMotionScore)
             .FirstOrDefault();
@@ -92,7 +132,9 @@ public sealed class ActiveSpeakerDetector
         {
             // Keep previous speaker briefly to reduce flicker.
             if (_activeTrackId != null && nowUtc <= _activeUntilUtc)
+            {
                 return _activeTrackId;
+            }
 
             _activeTrackId = null;
             return null;

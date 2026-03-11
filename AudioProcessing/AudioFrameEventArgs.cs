@@ -1,5 +1,3 @@
-using System;
-
 namespace AudioProcessing;
 
 /// <summary>
@@ -18,35 +16,29 @@ namespace AudioProcessing;
 /// Architectural Role:
 /// Data Transfer Object (DTO) / Event Arguments.
 /// </remarks>
-public sealed class AudioFrameEventArgs : EventArgs
+/// <remarks>
+/// Initializes a new instance of the AudioFrameEventArgs class.
+/// </remarks>
+/// <param name="samples">The mono audio samples.</param>
+/// <param name="sampleRateHz">The sample rate in Hertz.</param>
+/// <param name="offset">The monotonic time offset.</param>
+public sealed class AudioFrameEventArgs(float[] samples, int sampleRateHz, TimeSpan offset) : EventArgs
 {
-    /// <summary>
-    /// Initializes a new instance of the AudioFrameEventArgs class.
-    /// </summary>
-    /// <param name="samples">The mono audio samples.</param>
-    /// <param name="sampleRateHz">The sample rate in Hertz.</param>
-    /// <param name="offset">The monotonic time offset.</param>
-    public AudioFrameEventArgs(float[] samples, int sampleRateHz, TimeSpan offset)
-    {
-        Samples = samples;
-        SampleRateHz = sampleRateHz;
-        Offset = offset;
-    }
 
     /// <summary>
     /// Gets the mono audio samples in range [-1..1].
     /// </summary>
-    public float[] Samples { get; }
+    public float[] Samples { get; } = samples;
 
     /// <summary>
     /// Gets the sample rate of the audio in Hertz.
     /// </summary>
-    public int SampleRateHz { get; }
+    public int SampleRateHz { get; } = sampleRateHz;
 
     /// <summary>
     /// Gets the time offset since capture started (monotonic).
     /// </summary>
-    public TimeSpan Offset { get; }
+    public TimeSpan Offset { get; } = offset;
 }
 
 

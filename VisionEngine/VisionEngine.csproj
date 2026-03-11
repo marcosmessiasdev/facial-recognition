@@ -14,6 +14,7 @@
     <ProjectReference Include="..\FaceAttributes\FaceAttributes.csproj" />
     <ProjectReference Include="..\AudioProcessing\AudioProcessing.csproj" />
     <ProjectReference Include="..\SpeakerDetection\SpeakerDetection.csproj" />
+    <ProjectReference Include="..\SpeakerDiarization\SpeakerDiarization.csproj" />
     <ProjectReference Include="..\MeetingAnalytics\MeetingAnalytics.csproj" />
     <ProjectReference Include="..\FaceTracking\FaceTracking.csproj" />
     <ProjectReference Include="..\IdentityStore\IdentityStore.csproj" />
@@ -25,6 +26,7 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>

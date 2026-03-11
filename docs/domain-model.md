@@ -1,34 +1,34 @@
 # Domain Model
 
-The system operates on a set of core entities that represent the state of the physical world being monitored.
+## Entities
 
-## Key Entities
+### `MeetingSession`
+The top-level root. Represents one full recording session.
+- **StartedAtUtc**: The time `VisionEngine.Start()` was called.
+- **EndedAtUtc**: The time it was stopped.
+- **Transcript**: Full list of transcribed sentences with speaker identifiers.
+- **Segments**: `SpeakerSegment` items marking exact start/stop intervals for every spoken event.
+- **Aggregates**: Statistical summaries (e.g., `DominantSpeakers`).
 
-### VisionFrame
-- **Role**: Unit of Work.
-- **Responsibility**: Holds the raw pixels and spatial metadata of a single moment in time.
-- **Lifecycle**: Temporary, usually disposed after one pipeline pass.
+### `Track` (from `FaceTracking`)
+An ephemeral memory construct matching bounding boxes across contiguous video frames. If a person drops off-screen and returns, they are assigned a new Track ID, and their ArcFace embedding maps them back to the same logical `Person`.
 
-### Track
-- **Role**: State Container.
-- **Responsibility**: Represents a persisting human identity in the video stream.
-- **Attributes**: Stable ID, Bounding Box, Name, Emotion, Age, Gender, Mouth Motion Score, Speaking Status.
+### `Person` (from `IdentityStore`)
+A confirmed physical identity.
+- **Id**: Guid acting as the database PK.
+- **Name**: User-assigned name representing the person.
+- **Embedding**: An array of floating-point numbers encoding unique facial structures from ArcFace.
+- **ImageBase64**: The high-res visual crop snapshot.
 
-### Person
-- **Role**: Persistent Identity.
-- **Responsibility**: Represents a registered user in the permanent database.
-- **Attributes**: Name, Facial Embedding (512-float vector).
+### `VisionFrame`
+An atomic encapsulation linking a timestamp with raw bytes. Holds the OpenCvSharp `Mat` and `SampleRate` audio pointers aligned.
 
-### MeetingSession
-- **Role**: Aggregate Root for Analytics.
-- **Responsibility**: Encapsulates a start-to-finish meeting period.
-- **Content**: Chronicle of `SpeakerSegments` and calculated summary statistics.
+### `AudioSpeakerSegment`
+Used in the `SpeakerDiarization` module to bucketize consecutive audio bytes containing human speech. Later clustered using aggressive cosine constraints mapping it to a real `PersonName`.
 
-### SpeakerSegment
-- **Role**: Value Object / Event Record.
-- **Responsibility**: Records a period where a specific identifier was identified as the active speaker.
-
-## Relationships
-- A **Track** can be associated with one **Person** via embedding similarity.
-- A **MeetingSession** contains many **SpeakerSegments**.
-- **SpeakerSegments** reference either a **Track ID** (anonymous) or a **Person Name** (identified).
+## Concept Flow
+1. Raw `VisionFrame` instances feed into detection.
+2. The detected face becomes a `Track`.
+3. If the face matches a known ArcFace array, the `Track` acquires a `PersonName` reference pointing to `Person`.
+4. When `TalkNetAsdModel` or `SileroVad` detects speech while the face's mouth is moving, a `SpeakerSegment` is created for that `Person`.
+5. When the user clicks Stop, all uncommitted data commits into `MeetingSession`, which serializes the output to disk.

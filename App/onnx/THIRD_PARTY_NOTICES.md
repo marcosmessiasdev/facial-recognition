@@ -24,7 +24,16 @@ The FaceMesh landmarks model file `face_mesh_Nx3x192x192_post.onnx` was download
 
 - https://github.com/PINTO0309/facemesh_onnx_tensorrt (Apache-2.0)
 
+The speaker embedding model file `nemo_en_titanet_small.onnx` was downloaded from:
+
+- https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models
+
 See the license texts in this folder.
+
+The ASD model file `talknet_asd.onnx` was exported from the TalkNet ASD project weights:
+
+- https://github.com/TaoRuijie/TalkNet-ASD (MIT)
+- Weights source: `App/models/talknet/pretrain_TalkSet.model` (Google Drive id referenced by upstream demo)
 
 ## Notes
 

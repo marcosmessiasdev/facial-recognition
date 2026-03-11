@@ -1,5 +1,3 @@
-using System;
-
 namespace AudioProcessing;
 
 public interface IAudioCapture : IDisposable
@@ -9,6 +7,5 @@ public interface IAudioCapture : IDisposable
     int FrameSizeSamples { get; }
     string? SelectedDeviceName { get; }
     void Start();
-    void Stop();
+    void StopCapture();
 }
-

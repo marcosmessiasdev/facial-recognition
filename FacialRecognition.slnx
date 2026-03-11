@@ -10,6 +10,7 @@
   <Project Path="FaceLandmarks/FaceLandmarks.csproj" />
   <Project Path="AudioProcessing/AudioProcessing.csproj" />
   <Project Path="SpeakerDetection/SpeakerDetection.csproj" />
+  <Project Path="SpeakerDiarization/SpeakerDiarization.csproj" />
   <Project Path="MeetingAnalytics/MeetingAnalytics.csproj" />
   <Project Path="SpeechProcessing/SpeechProcessing.csproj" />
   <Project Path="FaceRecognition/FaceRecognition.csproj" />

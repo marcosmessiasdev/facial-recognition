@@ -1,4 +1,4 @@
-﻿namespace FaceRecognition;
+namespace FaceRecognition;
 
 public class Class1
 {

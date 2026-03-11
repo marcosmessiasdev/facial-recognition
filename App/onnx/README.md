@@ -36,6 +36,16 @@ This folder contains ONNX models that are vendored into the repo so the app can 
   - Source: `PINTO0309/facemesh_onnx_tensorrt` (Apache-2.0)
   - SHA256: `ae6ada9004f22be3ab6bab8cbfbc8b795f8595f69e5eea77b95cb2fc344c04eb`
 
+- `nemo_en_titanet_small.onnx`
+  - Task: speaker embedding (for diarization / speaker clustering)
+  - Source: `k2-fsa/sherpa-onnx` release `speaker-recongition-models` (derived from NVIDIA NeMo)
+  - SHA256: `ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e`
+
+- `talknet_asd.onnx`
+  - Task: audio-visual active speaker detection (multimodal)
+  - Source: exported from `TaoRuijie/TalkNet-ASD` pretrained weights (MIT)
+  - SHA256: `7a80b18497359db20aa651fcaba168d3aaeb67f4c6d09575cd8b149813161f40`
+
 ## Licenses and attribution
 
 See:
@@ -44,3 +54,4 @@ See:
 - `LICENSE.litehub-MIT.txt`
 - `LICENSE.silero-vad-MIT.txt`
 - `LICENSE.facemesh_onnx_tensorrt-Apache-2.0.txt`
+- `LICENSE.talknet-asd-MIT.txt`

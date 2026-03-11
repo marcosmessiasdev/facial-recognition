@@ -1,4 +1,4 @@
-﻿namespace E2ETests;
+namespace E2ETests;
 
 public class Tests
 {

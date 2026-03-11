@@ -75,11 +75,13 @@ public partial class VisionPipeline : IDisposable
     private GenderAgeClassifier? _genderAgeClassifier;
     private IAudioCapture? _audioCapture;
     private SileroVad? _vad;
+    private VadStateMachine? _vadStateMachine;
     private bool _vadSpeechActive;
     private float _vadSpeechProb;
     private DateTime _lastVadLogUtc = DateTime.MinValue;
     private DateTime _lastAudioStatsLogUtc = DateTime.MinValue;
     private DateTime? _audioBaseUtc;
+    private TimeSpan _lastAudioOffset;
 
     private MouthMotionAnalyzer? _mouthAnalyzer;
     private ActiveSpeakerDetector? _activeSpeaker;
@@ -90,6 +92,7 @@ public partial class VisionPipeline : IDisposable
     private OnlineSpeakerDiarizer? _diarizer;
     private int? _activeAudioSpeakerId;
     private DateTime _lastAnalyticsUpdateUtc = DateTime.MinValue;
+    private volatile bool _acceptAudioFrames;
     private readonly FaceTracker _tracker;
     private readonly PersonRepository _personRepo = new();
     private BoundingBoxOverlay? _overlay;
@@ -229,8 +232,11 @@ public partial class VisionPipeline : IDisposable
                     whisperPath,
                     _cfg.TranscriptionLanguage,
                     _cfg.TranscriptionHangoverMs,
-                    _cfg.TranscriptionMaxSegmentSeconds);
+                    _cfg.TranscriptionMaxSegmentSeconds,
+                    _cfg.TranscriptionMinSegmentMs);
                 _stt.TranscriptReady += OnTranscriptReady;
+                _stt.TranscriptionFailed += OnTranscriptionFailed;
+                _stt.SpeechSegmentReady += OnSpeechSegmentReady;
                 AppLogger.Instance.Information("Whisper transcription enabled: {Path}", whisperPath);
             }
             else
@@ -280,12 +286,37 @@ public partial class VisionPipeline : IDisposable
             if (File.Exists(vadPath))
             {
                 _vad = new SileroVad(vadPath);
+                AppLogger.Instance.Information("SileroVad IO: {Info}", _vad.DebugInfo);
+                _vadStateMachine = new VadStateMachine(
+                    minSpeechMs: _cfg.AudioVadMinSpeechMs,
+                    minSilenceMs: _cfg.AudioVadMinSilenceMs,
+                    hangoverMs: _cfg.AudioVadHangoverMs);
 
                 string source = (_cfg.AudioSource ?? "loopback").Trim();
-                _audioCapture = string.Equals(source, "microphone", StringComparison.OrdinalIgnoreCase) ||
+
+                if (string.Equals(source, "test", StringComparison.OrdinalIgnoreCase))
+                {
+                    string? file = _cfg.AudioTestFile;
+                    if (string.IsNullOrWhiteSpace(file))
+                    {
+                        throw new InvalidOperationException("AudioSource is 'test' but AudioTestFile is not set.");
+                    }
+
+                    string resolved = Path.IsPathRooted(file) ? file : Path.Combine(basedir, file);
+                    _audioCapture = new TestAudioCapture(
+                        resolved,
+                        loop: _cfg.AudioTestLoop,
+                        initialSilenceMs: _cfg.AudioTestInitialSilenceMs,
+                        targetSampleRateHz: _cfg.AudioVadSampleRateHz,
+                        frameSizeSamples: _cfg.AudioVadFrameSizeSamples);
+                }
+                else
+                {
+                    _audioCapture = string.Equals(source, "microphone", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(source, "mic", StringComparison.OrdinalIgnoreCase)
-                    ? new MicrophoneAudioCapture(_cfg.AudioVadSampleRateHz, _cfg.AudioVadFrameSizeSamples, _cfg.AudioMicrophoneDevice)
-                    : new LoopbackAudioCapture(_cfg.AudioVadSampleRateHz, _cfg.AudioVadFrameSizeSamples, _cfg.AudioLoopbackDevice);
+                        ? new MicrophoneAudioCapture(_cfg.AudioVadSampleRateHz, _cfg.AudioVadFrameSizeSamples, _cfg.AudioMicrophoneDevice)
+                        : new LoopbackAudioCapture(_cfg.AudioVadSampleRateHz, _cfg.AudioVadFrameSizeSamples, _cfg.AudioLoopbackDevice);
+                }
 
                 _audioCapture.FrameArrived += OnAudioFrameArrived;
                 AppLogger.Instance.Information("SileroVad loaded: {Path}", vadPath);
@@ -307,6 +338,7 @@ public partial class VisionPipeline : IDisposable
     public void Start(IntPtr targetHwnd)
     {
         _targetHwnd = targetHwnd;
+        _acceptAudioFrames = true;
 
         Application.Current.Dispatcher.Invoke(() =>
         {
@@ -319,6 +351,8 @@ public partial class VisionPipeline : IDisposable
 
         try
         {
+            _vad?.ResetState();
+            _vadStateMachine?.Reset();
             _audioCapture?.Start();
             if (_audioCapture != null)
             {
@@ -342,6 +376,11 @@ public partial class VisionPipeline : IDisposable
     /// </summary>
     private void OnAudioFrameArrived(object? sender, AudioFrameEventArgs e)
     {
+        if (!_acceptAudioFrames)
+        {
+            return;
+        }
+
         SileroVad? vad = _vad;
         if (vad == null)
         {
@@ -360,7 +399,7 @@ public partial class VisionPipeline : IDisposable
             }
         }
 
-        if (maxAbsFrame > 0f && maxAbsFrame < 0.05f)
+        if (maxAbsFrame is > 0f and < 0.05f)
         {
             float gain = MathF.Min(20f, 0.2f / maxAbsFrame);
             for (int i = 0; i < e.Samples.Length; i++)
@@ -372,6 +411,7 @@ public partial class VisionPipeline : IDisposable
 
         // Lightweight audio stats to help diagnose routing/silence issues.
         DateTime now = DateTime.UtcNow;
+        _lastAudioOffset = e.Offset;
         if ((now - _lastAudioStatsLogUtc) > TimeSpan.FromSeconds(2))
         {
             _lastAudioStatsLogUtc = now;
@@ -405,7 +445,10 @@ public partial class VisionPipeline : IDisposable
             return;
         }
 
-        bool active = prob >= _cfg.AudioVadSpeechThreshold;
+        VadStateMachine? sm = _vadStateMachine;
+        bool active = sm != null
+            ? sm.Update(now, prob, _cfg.AudioVadSpeechThreshold)
+            : prob >= _cfg.AudioVadSpeechThreshold;
         bool stateChanged = active != _vadSpeechActive;
         _vadSpeechActive = active;
         _vadSpeechProb = prob;
@@ -414,7 +457,7 @@ public partial class VisionPipeline : IDisposable
         if (stateChanged || (now - _lastVadLogUtc) > TimeSpan.FromSeconds(2))
         {
             _lastVadLogUtc = now;
-            AppLogger.Instance.Debug("VAD speech={Speech} prob={Prob:0.00}", _vadSpeechActive, prob);
+            AppLogger.Instance.Debug("VAD speech={Speech} prob={Prob:0.000}", _vadSpeechActive, prob);
         }
 
         try
@@ -426,21 +469,21 @@ public partial class VisionPipeline : IDisposable
             // ignore
         }
 
-            try
-            {
-                _diarizer?.PushFrame(e.Samples, e.Offset, active);
-            }
-            catch
-            {
-                // ignore
-            }
+        try
+        {
+            _diarizer?.PushFrame(e.Samples, e.Offset, active);
+        }
+        catch
+        {
+            // ignore
+        }
 
-            lock (_audioChunksSync)
-            {
-                _audioChunks.Add((e.Offset, e.Samples));
+        lock (_audioChunksSync)
+        {
+            _audioChunks.Add((e.Offset, e.Samples));
             TimeSpan cutoff = e.Offset - TimeSpan.FromSeconds(6);
-                int remove = 0;
-                while (remove < _audioChunks.Count && _audioChunks[remove].Offset < cutoff)
+            int remove = 0;
+            while (remove < _audioChunks.Count && _audioChunks[remove].Offset < cutoff)
             {
                 remove++;
             }
@@ -450,7 +493,7 @@ public partial class VisionPipeline : IDisposable
                 _audioChunks.RemoveRange(0, remove);
             }
         }
-        }
+    }
 
     private void OnTranscriptReady(object? sender, TranscriptSegment seg)
     {
@@ -473,9 +516,23 @@ public partial class VisionPipeline : IDisposable
         }
     }
 
+    private void OnTranscriptionFailed(object? sender, Exception ex)
+    {
+        AppLogger.Instance.Debug(ex, "Transcription failed (best-effort)");
+    }
+
+    private void OnSpeechSegmentReady(object? sender, (TimeSpan Start, TimeSpan End, int SampleCount) seg)
+    {
+        double seconds = (seg.End - seg.Start).TotalSeconds;
+        AppLogger.Instance.Information("Speech segment [{Start}-{End}] dur={Dur:0.00}s samples={Samples}",
+            seg.Start, seg.End, seconds, seg.SampleCount);
+    }
+
     private void OnAudioSpeakerSegmentReady(object? sender, SpeakerDiarization.AudioSpeakerSegment seg)
     {
         _activeAudioSpeakerId = seg.SpeakerId;
+        AppLogger.Instance.Information("Diarization segment speaker={Speaker} [{Start}-{End}] conf={Conf:0.00}",
+            seg.SpeakerId, seg.Start, seg.End, seg.Confidence);
 
         try
         {
@@ -494,54 +551,54 @@ public partial class VisionPipeline : IDisposable
     /// <summary>
     /// Handles incoming raw video frames from the capture service.
     /// </summary>
-        private void OnRawFrameArrived(object? sender, (byte[] data, int width, int height, int stride) args)
-        {
+    private void OnRawFrameArrived(object? sender, (byte[] data, int width, int height, int stride) args)
+    {
         // Producer — drop frame if queue is full to keep latency minimal
         if (_frameQueue.Count < _frameQueue.BoundedCapacity)
         {
             VisionFrame visionFrame = new(args.data, args.width, args.height, args.stride);
             _ = _frameQueue.TryAdd(visionFrame);
         }
-        }
+    }
 
-        private bool TryGetRecentAudioWindow(TimeSpan endOffset, TimeSpan window, out float[] audio)
-        {
-            audio = [];
+    private bool TryGetRecentAudioWindow(TimeSpan endOffset, TimeSpan window, out float[] audio)
+    {
+        audio = [];
 
-            int sr = _cfg.AudioVadSampleRateHz;
-            int needed = (int)Math.Ceiling(window.TotalSeconds * sr);
-            if (needed <= 0)
+        int sr = _cfg.AudioVadSampleRateHz;
+        int needed = (int)Math.Ceiling(window.TotalSeconds * sr);
+        if (needed <= 0)
         {
             return false;
         }
 
         List<float> samples = new();
-            lock (_audioChunksSync)
+        lock (_audioChunksSync)
+        {
+            // Gather chunks up to endOffset.
+            foreach ((TimeSpan Offset, float[]? Samples) in _audioChunks)
             {
-                // Gather chunks up to endOffset.
-                foreach ((TimeSpan Offset, float[]? Samples) in _audioChunks)
-                {
-                    if (Offset > endOffset)
+                if (Offset > endOffset)
                 {
                     break;
                 }
 
                 samples.AddRange(Samples);
-                }
             }
+        }
 
-            if (samples.Count < needed)
+        if (samples.Count < needed)
         {
             return false;
         }
 
         audio = [.. samples.Skip(samples.Count - needed).Take(needed)];
-            return true;
-        }
+        return true;
+    }
 
-        /// <summary>
-        /// The main background processing loop that consumes frames and executes the AI pipeline.
-        /// </summary>
+    /// <summary>
+    /// The main background processing loop that consumes frames and executes the AI pipeline.
+    /// </summary>
     private async Task ProcessFramesAsync(CancellationToken ct)
     {
         long frameCount = 0;
@@ -580,19 +637,19 @@ public partial class VisionPipeline : IDisposable
                     // 2. Update tracker — get stable, ID-assigned face list
                     List<Track> tracks = _tracker.Update(boxes);
 
-                        // 2a. TalkNet ASD buffer + inference (multimodal)
-                        if (_talkNet != null)
-                        {
-                            float fps = Math.Max(1, _cfg.CaptureFps);
-                            int windowFrames = Math.Clamp(_cfg.TalkNetWindowFrames, 5, 60);
+                    // 2a. TalkNet ASD buffer + inference (multimodal)
+                    if (_talkNet != null)
+                    {
+                        float fps = Math.Max(1, _cfg.CaptureFps);
+                        int windowFrames = Math.Clamp(_cfg.TalkNetWindowFrames, 5, 60);
                         DateTime nowUtc = DateTime.UtcNow;
                         DateTime baseUtc = _audioBaseUtc ?? nowUtc;
                         TimeSpan nowOffset = nowUtc - baseUtc;
                         TimeSpan window = TimeSpan.FromSeconds(windowFrames / fps);
 
-                            foreach (Track track in tracks)
-                            {
-                                track.FramesSinceAsd++;
+                        foreach (Track track in tracks)
+                        {
+                            track.FramesSinceAsd++;
 
                             OcvRect rect = new(
                                     Math.Max(0, track.Box.X),
@@ -600,14 +657,14 @@ public partial class VisionPipeline : IDisposable
                                     Math.Min(track.Box.Width, frame.Mat.Width - track.Box.X),
                                     Math.Min(track.Box.Height, frame.Mat.Height - track.Box.Y));
 
-                                if (rect.Width < 24 || rect.Height < 24)
+                            if (rect.Width < 24 || rect.Height < 24)
                             {
                                 continue;
                             }
 
                             using Mat crop = new(frame.Mat, rect);
-                                using Mat gray = new();
-                                if (crop.Channels() == 4)
+                            using Mat gray = new();
+                            if (crop.Channels() == 4)
                             {
                                 Cv2.CvtColor(crop, gray, ColorConversionCodes.BGRA2GRAY);
                             }
@@ -617,72 +674,72 @@ public partial class VisionPipeline : IDisposable
                             }
 
                             using Mat resized = new();
-                                Cv2.Resize(gray, resized, new OpenCvSharp.Size(112, 112));
+                            Cv2.Resize(gray, resized, new OpenCvSharp.Size(112, 112));
 
-                                if (!_talkNetFramesByTrack.TryGetValue(track.Id, out Queue<Mat>? q))
-                                {
-                                    q = new Queue<Mat>(windowFrames + 2);
-                                    _talkNetFramesByTrack[track.Id] = q;
-                                }
+                            if (!_talkNetFramesByTrack.TryGetValue(track.Id, out Queue<Mat>? q))
+                            {
+                                q = new Queue<Mat>(windowFrames + 2);
+                                _talkNetFramesByTrack[track.Id] = q;
+                            }
 
-                                q.Enqueue(resized.Clone());
-                                while (q.Count > windowFrames)
-                                {
+                            q.Enqueue(resized.Clone());
+                            while (q.Count > windowFrames)
+                            {
                                 Mat old = q.Dequeue();
-                                    old.Dispose();
-                                }
+                                old.Dispose();
+                            }
 
-                                // Infer only when enough frames are buffered and at a modest cadence.
-                                if (q.Count == windowFrames && track.FramesSinceAsd >= 5 && TryGetRecentAudioWindow(nowOffset, window, out float[]? audio))
+                            // Infer only when enough frames are buffered and at a modest cadence.
+                            if (q.Count == windowFrames && track.FramesSinceAsd >= 5 && TryGetRecentAudioWindow(nowOffset, window, out float[]? audio))
+                            {
+                                try
                                 {
-                                    try
-                                    {
                                     float[] probs = _talkNet.Predict(audio, [.. q], fps);
-                                        if (probs.Length > 0)
-                                        {
-                                            float mean = 0f;
-                                            foreach (float p in probs)
+                                    if (probs.Length > 0)
+                                    {
+                                        float mean = 0f;
+                                        foreach (float p in probs)
                                         {
                                             mean += p;
                                         }
 
                                         mean /= probs.Length;
-                                            track.TalkNetSpeakingProb = mean;
-                                        }
-                                        track.FramesSinceAsd = 0;
+                                        track.TalkNetSpeakingProb = mean;
                                     }
-                                    catch (Exception ex)
-                                    {
-                                        AppLogger.Instance.Debug(ex, "TalkNet ASD inference failed for track {Id}", track.Id);
-                                        track.TalkNetSpeakingProb = 0f;
-                                    }
+                                    track.FramesSinceAsd = 0;
+                                }
+                                catch (Exception ex)
+                                {
+                                    AppLogger.Instance.Debug(ex, "TalkNet ASD inference failed for track {Id}", track.Id);
+                                    track.TalkNetSpeakingProb = 0f;
                                 }
                             }
+                        }
 
                         // Prune stale tracks.
                         HashSet<int> activeIds = [.. tracks.Select(t => t.Id)];
-                        int[] keys = _talkNetFramesByTrack.Keys.ToArray();
-                            foreach (int id in keys)
-                            {
-                                if (activeIds.Contains(id))
+                        int[] keys = [.. _talkNetFramesByTrack.Keys];
+                        foreach (int id in keys)
+                        {
+                            if (activeIds.Contains(id))
                             {
                                 continue;
                             }
 
                             if (_talkNetFramesByTrack.TryGetValue(id, out Queue<Mat>? q))
-                                {
-                                    while (q.Count > 0)
+                            {
+                                while (q.Count > 0)
                                 {
                                     q.Dequeue().Dispose();
                                 }
                             }
                             _ = _talkNetFramesByTrack.Remove(id);
-                            }
                         }
+                    }
 
-                        // 2b. Mouth motion (cheap visual proxy for speaking)
-                        if (_mouthAnalyzer != null)
-                        {
+                    // 2b. Mouth motion (cheap visual proxy for speaking)
+                    if (_mouthAnalyzer != null)
+                    {
                         DateTime nowUtc = DateTime.UtcNow;
                         foreach (Track track in tracks)
                         {
@@ -935,7 +992,7 @@ public partial class VisionPipeline : IDisposable
                     string? hudText = null;
                     try
                     {
-                        string line1 = $"Audio: {_cfg.AudioSource} | VAD={_vadSpeechActive} prob={_vadSpeechProb:0.00}";
+                        string line1 = $"Audio: {_cfg.AudioSource} | VAD={_vadSpeechActive} prob={_vadSpeechProb:0.000}";
                         int? audioSpk = _activeAudioSpeakerId;
                         if (audioSpk.HasValue)
                         {
@@ -950,8 +1007,28 @@ public partial class VisionPipeline : IDisposable
                             line1 += $" | Top: {topStr}";
                         }
 
-                        string? line2 = _lastTranscript;
-                        hudText = string.IsNullOrWhiteSpace(line2) ? line1 : line1 + Environment.NewLine + "STT: " + line2;
+                        string? line2 = null;
+                        IReadOnlyList<(string SpeakerKey, string? DisplayName, double Score)>? part = _analytics?.GetParticipationSoFar(DateTime.UtcNow, top: 3);
+                        if (part != null && part.Count > 0)
+                        {
+                            string partStr = string.Join(" | ", part.Select(p =>
+                                $"{(string.IsNullOrWhiteSpace(p.DisplayName) ? p.SpeakerKey : p.DisplayName)} {p.Score:0}"));
+                            line2 = $"Participation: {partStr}";
+                        }
+
+                        string? line3 = _lastTranscript;
+                        if (string.IsNullOrWhiteSpace(line2) && string.IsNullOrWhiteSpace(line3))
+                        {
+                            hudText = line1;
+                        }
+                        else
+                        {
+                            hudText = !string.IsNullOrWhiteSpace(line2) && string.IsNullOrWhiteSpace(line3)
+                                ? line1 + Environment.NewLine + line2
+                                : string.IsNullOrWhiteSpace(line2) && !string.IsNullOrWhiteSpace(line3)
+                                ? line1 + Environment.NewLine + "STT: " + line3
+                                : line1 + Environment.NewLine + line2 + Environment.NewLine + "STT: " + line3;
+                        }
                     }
                     catch { /* ignore */ }
                     _ = Application.Current.Dispatcher.BeginInvoke(() =>
@@ -976,14 +1053,28 @@ public partial class VisionPipeline : IDisposable
     public void Stop()
     {
         AppLogger.Instance.Information("Stopping VisionPipeline...");
+        _acceptAudioFrames = false;
         _cancellationTokenSource?.Cancel();
         _ = (_pipelineTask?.Wait(TimeSpan.FromSeconds(3)));
         _captureService.StopCapture();
+
+        try
+        {
+            if (_audioCapture != null)
+            {
+                _audioCapture.FrameArrived -= OnAudioFrameArrived;
+            }
+        }
+        catch { /* ignore */ }
 
         try { _audioCapture?.StopCapture(); } catch { /* ignore */ }
 
         try
         {
+            // Best-effort flush of pending audio-derived events before persisting the session JSON.
+            try { _diarizer?.Flush(_lastAudioOffset); } catch { /* ignore */ }
+            try { _stt?.StopAndDrain(TimeSpan.FromSeconds(25)); } catch { /* ignore */ }
+
             if (_analytics != null)
             {
                 string basedir = AppDomain.CurrentDomain.BaseDirectory;
@@ -1030,6 +1121,8 @@ public partial class VisionPipeline : IDisposable
         if (_stt != null)
         {
             _stt.TranscriptReady -= OnTranscriptReady;
+            _stt.TranscriptionFailed -= OnTranscriptionFailed;
+            _stt.SpeechSegmentReady -= OnSpeechSegmentReady;
         }
 
         _stt?.Dispose();

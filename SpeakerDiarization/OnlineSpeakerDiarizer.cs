@@ -74,12 +74,25 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
     }
 
     /// <summary>
+    /// Finalizes any in-progress speech buffer (best-effort) when the stream ends.
+    /// </summary>
+    public void Flush(TimeSpan endTimestamp)
+    {
+        if (_inSpeech)
+        {
+            FinalizeSpeech(endTimestamp);
+            _inSpeech = false;
+            _speechBuffer.Clear();
+        }
+    }
+
+    /// <summary>
     /// Closes the current contiguous speech buffer, chunks it for embeddings, and emits segments.
     /// </summary>
     /// <param name="end">Timeline mark when speech finalized.</param>
     private void FinalizeSpeech(TimeSpan end)
     {
-        float[] pcm = _speechBuffer.ToArray();
+        float[] pcm = [.. _speechBuffer];
         if (pcm.Length < _windowSamples)
         {
             return;
@@ -209,4 +222,3 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
         }
     }
 }
-

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using FlaUI.Core.AutomationElements;
 using Microsoft.Playwright;
+using System.Text.Json;
 
 namespace E2ETests;
 
@@ -56,6 +57,38 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
     [OneTimeSetUp]
     public async Task SetupBrowserAsync()
     {
+        // Optional: if a local GIF folder is available, copy GIFs into the test assets to enable real mouth motion.
+        // This is best-effort and does not affect reproducibility when missing.
+        try
+        {
+            string? gifDir = Environment.GetEnvironmentVariable("FACIAL_E2E_GIF_DIR");
+            if (string.IsNullOrWhiteSpace(gifDir))
+            {
+                gifDir = null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(gifDir) && Directory.Exists(gifDir))
+            {
+                string baseDir = TestContext.CurrentContext.TestDirectory;
+                string assets = Path.Combine(baseDir, "video", "assets");
+                _ = Directory.CreateDirectory(assets);
+
+                string[] gifs = [.. Directory.GetFiles(gifDir, "*.gif")
+                    .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                    .Take(6)];
+
+                for (int i = 0; i < gifs.Length; i++)
+                {
+                    string dst = Path.Combine(assets, $"face{i + 1}.gif");
+                    File.Copy(gifs[i], dst, overwrite: true);
+                }
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
         _playwright = await Playwright.CreateAsync();
         _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
         {
@@ -171,12 +204,9 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
 
         // Stop pipeline
         Button? stopBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton();
-        stopBtn?.Click();
-        WaitForLogContains("VisionPipeline stopped", timeoutMs: 8000);
-        await Task.Delay(500);
-
-        string logAfterStop = ReadLatestLog();
-        Assert.That(logAfterStop, Does.Contain("VisionPipeline stopped"), "Pipeline stop not confirmed in log");
+        Assert.That(stopBtn, Is.Not.Null, "StopButton not found");
+        stopBtn!.Invoke();
+        WaitForLogContainsAny(["VisionPipeline stopped", "Meeting session saved:"], timeoutMs: 120_000);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -211,8 +241,11 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
         Button? startBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StartButton"))?.AsButton();
         startBtn?.Invoke();
 
-        // Run for 30 seconds
-        TestContext.Out.WriteLine("Running pipeline for 30 seconds stability test...");
+        // Run for 30 seconds of *actual capture* (do not count model load / UI automation time).
+        WaitForLogContains("Capture started", timeoutMs: 120_000);
+        WaitForLogContainsAny(["Faces detected:"], timeoutMs: 120_000);
+
+        TestContext.Out.WriteLine("Running pipeline for 30 seconds stability test (capture-active)...");
         await Task.Delay(30_000);
 
         // App must still be alive
@@ -230,7 +263,42 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
 
         Button? stopBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton();
         stopBtn?.Invoke();
-        await Task.Delay(1000);
+
+        // Wait for audio-derived outputs to flush (STT + diarization + session JSON).
+        WaitForLogContainsAny(["Meeting session saved:", "VisionPipeline stopped"], timeoutMs: 90_000);
+        WaitForLogContainsAny(["Transcript [", "Transcription failed"], timeoutMs: 90_000);
+        WaitForLogContains("Diarization segment", timeoutMs: 90_000);
+        await Task.Delay(500);
+
+        string logAfter = ReadLatestLog();
+        Assert.That(logAfter, Does.Contain("VAD speech=true").IgnoreCase, "Expected VAD to activate at least once (test audio fixture).");
+        Assert.That(logAfter, Does.Contain("Speech segment").IgnoreCase, "Expected at least one VAD speech segment.");
+        Assert.That(logAfter, Does.Contain("Transcript").IgnoreCase, "Expected at least one Whisper transcript.");
+        Assert.That(logAfter, Does.Contain("Diarization segment").IgnoreCase, "Expected at least one diarization segment.");
+
+        MatchCollection savedMatches = MeetingSessionSavedRegex().Matches(logAfter);
+        Assert.That(savedMatches, Has.Count.GreaterThan(0), "Meeting session JSON path was not logged.");
+        Match m = savedMatches[^1];
+
+        string jsonPath = m.Groups[1].Value.Trim();
+        Assert.That(File.Exists(jsonPath), Is.True, $"Meeting session JSON not found: {jsonPath}");
+
+        using FileStream fs = File.OpenRead(jsonPath);
+        using JsonDocument doc = JsonDocument.Parse(fs);
+
+        JsonElement root = doc.RootElement;
+        Assert.Multiple(() =>
+        {
+            Assert.That(root.TryGetProperty("Utterances", out JsonElement utter), Is.True);
+            Assert.That(utter.GetArrayLength(), Is.GreaterThan(0), "Expected utterances in session JSON.");
+
+            Assert.That(root.TryGetProperty("AudioSpeakerSegments", out JsonElement segs), Is.True);
+            Assert.That(segs.GetArrayLength(), Is.GreaterThan(0), "Expected diarization segments in session JSON.");
+
+            Assert.That(root.TryGetProperty("TurnsBySpeaker", out _), Is.True);
+            Assert.That(root.TryGetProperty("ParticipationScoreBySpeaker", out _), Is.True);
+            Assert.That(root.TryGetProperty("ConversationGraph", out _), Is.True);
+        });
     }
 #pragma warning restore CA1707
 
@@ -245,4 +313,7 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
 
     [GeneratedRegex(@"Faces detected: (\d+)")]
     private static partial Regex FacesCountRegex();
+
+    [GeneratedRegex(@"Meeting session saved:\s+(.*meeting_session_[^\s]+\.json)", RegexOptions.IgnoreCase)]
+    private static partial Regex MeetingSessionSavedRegex();
 }

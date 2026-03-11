@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Facial Recognition — Offline Demo</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: black;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        }
+        .grid {
+            width: 100vw;
+            height: 100vh;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 6px;
+            padding: 6px;
+            box-sizing: border-box;
+        }
+        .tile {
+            position: relative;
+            overflow: hidden;
+            background: #111;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .tile img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            filter: contrast(1.05) saturate(1.05);
+        }
+        .name {
+            position: absolute;
+            left: 10px;
+            top: 10px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            background: rgba(0,0,0,0.55);
+            color: #fff;
+            font-size: 14px;
+        }
+        .hint {
+            position: fixed;
+            left: 10px;
+            bottom: 10px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: rgba(0,0,0,0.55);
+            color: #fff;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid" id="grid">
+        <div class="tile"><img src="assets/face1.jpg" alt="Face 1" /><div class="name">Demo 1</div></div>
+        <div class="tile"><img src="assets/face2.jpg" alt="Face 2" /><div class="name">Demo 2</div></div>
+        <div class="tile"><img src="assets/face3.jpg" alt="Face 3" /><div class="name">Demo 3</div></div>
+        <div class="tile"><img src="assets/face4.jpg" alt="Face 4" /><div class="name">Demo 4</div></div>
+    </div>
+
+    <div class="hint" id="hint">Click once to start offline audio.</div>
+    <audio id="audio" src="audio/marshall_plan_speech.wav" loop preload="auto"></audio>
+
+    <script>
+        const audio = document.getElementById('audio');
+        const hint = document.getElementById('hint');
+
+        async function start() {
+            audio.volume = 1.0;
+            audio.muted = false;
+            audio.currentTime = 0;
+            try {
+                await audio.play();
+                hint.textContent = 'Audio playing.';
+                hint.style.opacity = '0.75';
+            } catch (err) {
+                hint.textContent = 'Audio failed to start: ' + (err && err.message ? err.message : err);
+            }
+        }
+
+        window.addEventListener('pointerdown', start, { once: true });
+    </script>
+</body>
+</html>
+

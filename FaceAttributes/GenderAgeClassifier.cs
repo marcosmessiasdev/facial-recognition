@@ -119,7 +119,7 @@ public sealed class GenderAgeClassifier : IDisposable
         };
 
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
-        float[] output = results.First(r => r.Name == _outputName).AsEnumerable<float>().ToArray();
+        float[] output = [.. results.First(r => r.Name == _outputName).AsEnumerable<float>()];
 
         if (output.Length < 3)
         {

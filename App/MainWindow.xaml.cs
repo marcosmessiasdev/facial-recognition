@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Diagnostics;
+using System.IO;
 using VisionEngine;
 
 namespace FacialRecognitionApp;
@@ -90,12 +92,7 @@ public partial class MainWindow : Window, IDisposable
 
         char[] buffer = new char[len + 1];
         int copied = GetWindowText(hwnd, buffer, buffer.Length);
-        if (copied <= 0)
-        {
-            return "";
-        }
-
-        return new string(buffer, 0, copied).Trim();
+        return copied <= 0 ? "" : new string(buffer, 0, copied).Trim();
     }
 
     /// <summary>
@@ -105,6 +102,28 @@ public partial class MainWindow : Window, IDisposable
     {
         LoadOpenWindows();
         StatusText.Text = "Lista atualizada.";
+    }
+
+    private void DemoButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string basedir = AppDomain.CurrentDomain.BaseDirectory;
+            string demo = Path.Combine(basedir, "demo", "index.html");
+            if (!File.Exists(demo))
+            {
+                StatusText.Text = "Demo não encontrado (demo/index.html).";
+                return;
+            }
+
+            string url = new Uri(demo).AbsoluteUri;
+            _ = Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            StatusText.Text = "Demo aberto no navegador.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = "Falha ao abrir demo: " + ex.Message;
+        }
     }
 
     /// <summary>

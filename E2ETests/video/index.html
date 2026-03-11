@@ -19,7 +19,7 @@
             width: 100vw;
             height: 100vh;
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             grid-template-rows: 1fr 1fr;
             gap: 6px;
             padding: 6px;
@@ -40,6 +40,7 @@
             object-fit: contain;
             background: #000;
             filter: contrast(1.05) saturate(1.05);
+            image-rendering: auto;
         }
         .name {
             position: absolute;
@@ -81,42 +82,119 @@
 <body>
     <div class="grid" id="grid">
         <div class="tile" data-id="0">
-            <img src="assets/face1.jpg" alt="Face 1" />
+            <img data-jpg="assets/face1.jpg" data-gif="assets/face1.gif" src="assets/face1.jpg" alt="Face 1" />
             <div class="name">Neil</div>
             <div class="mouth"></div>
         </div>
         <div class="tile" data-id="1">
-            <img src="assets/face2.jpg" alt="Face 2" />
+            <img data-jpg="assets/face2.jpg" data-gif="assets/face2.gif" src="assets/face2.jpg" alt="Face 2" />
             <div class="name">Buzz</div>
             <div class="mouth"></div>
         </div>
         <div class="tile" data-id="2">
-            <img src="assets/face3.jpg" alt="Face 3" />
+            <img data-jpg="assets/face3.jpg" data-gif="assets/face3.gif" src="assets/face3.jpg" alt="Face 3" />
             <div class="name">Sally</div>
             <div class="mouth"></div>
         </div>
         <div class="tile" data-id="3">
-            <img src="assets/face4.jpg" alt="Face 4" />
+            <img data-jpg="assets/face4.jpg" data-gif="assets/face4.gif" src="assets/face4.jpg" alt="Face 4" />
             <div class="name">Mae</div>
+            <div class="mouth"></div>
+        </div>
+        <div class="tile" data-id="4">
+            <img data-jpg="assets/face1.jpg" data-gif="assets/face5.gif" src="assets/face1.jpg" alt="Face 5" />
+            <div class="name">Ada</div>
+            <div class="mouth"></div>
+        </div>
+        <div class="tile" data-id="5">
+            <img data-jpg="assets/face2.jpg" data-gif="assets/face6.gif" src="assets/face2.jpg" alt="Face 6" />
+            <div class="name">Grace</div>
             <div class="mouth"></div>
         </div>
     </div>
 
-    <div class="hint" id="hint">Click once to start audio (offline).</div>
+    <div class="hint" id="hint">Click once to start audio (offline). Options: ?gif=all | ?gif=speaker&speaker=1&rotate=0</div>
 
-    <audio id="audio" src="assets/speech.ogg" loop preload="auto"></audio>
+    <!-- Use the offline WAV fixture (>= 10-word sentence) so loopback mode is always meaningful. -->
+    <audio id="audio" src="../audio/marshall_plan_speech.wav" loop preload="auto"></audio>
 
     <script>
         const audio = document.getElementById('audio');
         const tiles = Array.from(document.querySelectorAll('.tile'));
         const hint = document.getElementById('hint');
         let started = false;
+        let lastActive = -1;
+
+        const url = new URL(window.location.href);
+        const gifMode = (url.searchParams.get('gif') || 'speaker').toLowerCase(); // 'speaker' | 'all' | 'none'
+        const speakerParam = parseInt(url.searchParams.get('speaker') || '1', 10);
+        const preferredSpeaker = isFinite(speakerParam) ? Math.max(1, Math.min(tiles.length, speakerParam)) : 1;
+        const rotate = (url.searchParams.get('rotate') || '0') !== '0';
+
+        const gifAvailability = new Map(); // url -> Promise<boolean>
+
+        function ensureGifAvailableUrl(url) {
+            if (!url) return Promise.resolve(false);
+            const cached = gifAvailability.get(url);
+            if (cached) return cached;
+            const p = new Promise((resolve) => {
+                const pre = new Image();
+                pre.onload = () => resolve(true);
+                pre.onerror = () => resolve(false);
+                pre.src = url;
+            });
+            gifAvailability.set(url, p);
+            return p;
+        }
+
+        function setImgMode(img, mode) {
+            const jpg = img.getAttribute('data-jpg') || img.src;
+            const gif = img.getAttribute('data-gif') || '';
+
+            if (mode === 'gif') {
+                if (img.dataset.targetMode === 'gif') return;
+                img.dataset.targetMode = 'gif';
+                ensureGifAvailableUrl(gif).then((ok) => {
+                    if (img.dataset.targetMode !== 'gif') return;
+                    const next = ok ? gif : jpg;
+                    if (img.dataset.currentSrc !== next) {
+                        img.src = next;
+                        img.dataset.currentSrc = next;
+                    }
+                    img.dataset.mode = ok ? 'gif' : 'jpg';
+                });
+                return;
+            }
+
+            // jpg
+            if (img.dataset.targetMode === 'jpg') return;
+            img.dataset.targetMode = 'jpg';
+            if (img.dataset.currentSrc !== jpg) {
+                img.src = jpg;
+                img.dataset.currentSrc = jpg;
+            }
+            img.dataset.mode = 'jpg';
+        }
+
+        function applyGifPolicy(activeIdx) {
+            tiles.forEach((tile, idx) => {
+                const img = tile.querySelector('img');
+                if (!img) return;
+                if (gifMode === 'all') setImgMode(img, 'gif');
+                else if (gifMode === 'none') setImgMode(img, 'jpg');
+                else setImgMode(img, idx === activeIdx ? 'gif' : 'jpg');
+            });
+        }
 
         function updateSpeaking() {
             if (!started) return;
             const t = audio.currentTime || 0;
-            const active = Math.floor(t) % tiles.length;
-            tiles.forEach((el, idx) => el.classList.toggle('speaking', idx === active));
+            const active = rotate ? (Math.floor(t) % tiles.length) : (preferredSpeaker - 1);
+            if (active !== lastActive) {
+                tiles.forEach((el, idx) => el.classList.toggle('speaking', idx === active));
+                applyGifPolicy(active);
+                lastActive = active;
+            }
             requestAnimationFrame(updateSpeaking);
         }
 
@@ -126,6 +204,7 @@
             audio.volume = 1.0;
             audio.muted = false;
             audio.currentTime = 0;
+            applyGifPolicy(preferredSpeaker - 1);
             try {
                 await audio.play();
                 hint.textContent = 'Audio playing (loopback).';
@@ -137,6 +216,11 @@
         }
 
         window.addEventListener('pointerdown', start, { once: true });
+
+        // Show an animated "speaker" tile immediately (even before audio starts),
+        // so the capture target has obvious motion for debugging.
+        tiles.forEach((el, idx) => el.classList.toggle('speaking', idx === (preferredSpeaker - 1)));
+        applyGifPolicy(preferredSpeaker - 1);
     </script>
 </body>
 </html>

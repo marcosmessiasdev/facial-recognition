@@ -130,6 +130,47 @@ public sealed class MeetingAnalyticsEngine
             }
         }
 
+        // Turn-taking (count segments per speaker)
+        Dictionary<string, int> turns = new(StringComparer.OrdinalIgnoreCase);
+        foreach (SpeakerSegment seg in _segments)
+        {
+            _ = turns.TryGetValue(seg.SpeakerKey, out int t);
+            turns[seg.SpeakerKey] = t + 1;
+        }
+
+        // Conversation graph (who follows who)
+        Dictionary<(string From, string To), int> edgeCounts = new();
+        for (int i = 1; i < _segments.Count; i++)
+        {
+            SpeakerSegment prev = _segments[i - 1];
+            SpeakerSegment cur = _segments[i];
+            if (string.Equals(prev.SpeakerKey, cur.SpeakerKey, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            (string From, string To) key = (prev.SpeakerKey, cur.SpeakerKey);
+            _ = edgeCounts.TryGetValue(key, out int c);
+            edgeCounts[key] = c + 1;
+        }
+
+        List<ConversationEdge> graph = [.. edgeCounts
+            .OrderByDescending(kvp => kvp.Value)
+            .Select(kvp => new ConversationEdge { FromSpeakerKey = kvp.Key.From, ToSpeakerKey = kvp.Key.To, Count = kvp.Value })];
+
+        // Participation score (transparent heuristic)
+        const double wSpeak = 1.0;
+        const double wTurns = 5.0;
+        const double wInterrupt = 3.0;
+        Dictionary<string, double> participation = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string spk in speaking.Keys.Union(turns.Keys, StringComparer.OrdinalIgnoreCase).Union(interruptions.Keys, StringComparer.OrdinalIgnoreCase))
+        {
+            _ = speaking.TryGetValue(spk, out double sec);
+            _ = turns.TryGetValue(spk, out int t);
+            _ = interruptions.TryGetValue(spk, out int intr);
+            participation[spk] = (wSpeak * sec) + (wTurns * t) - (wInterrupt * intr);
+        }
+
         return new MeetingSession
         {
             StartedAtUtc = _startedAtUtc,
@@ -139,7 +180,10 @@ public sealed class MeetingAnalyticsEngine
             InterruptionsBySpeaker = interruptions,
             Utterances = [.. _utterances],
             AudioSpeakerSegments = [.. _audioSegments],
-            AudioSpeakerToFace = BuildAudioSpeakerToFaceMapping()
+            AudioSpeakerToFace = BuildAudioSpeakerToFaceMapping(),
+            TurnsBySpeaker = turns,
+            ParticipationScoreBySpeaker = participation,
+            ConversationGraph = graph
         };
     }
 
@@ -201,6 +245,66 @@ public sealed class MeetingAnalyticsEngine
         }
 
         return [.. totals
+            .OrderByDescending(kvp => kvp.Value)
+            .Take(Math.Clamp(top, 1, 10))
+            .Select(kvp => (kvp.Key, names.TryGetValue(kvp.Key, out string? n) ? n : null, kvp.Value))];
+    }
+
+    public IReadOnlyList<(string SpeakerKey, string? DisplayName, double Score)> GetParticipationSoFar(DateTime nowUtc, int top = 3)
+    {
+        // Speaking seconds
+        Dictionary<string, double> speaking = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string?> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (SpeakerSegment seg in _segments)
+        {
+            DateTime end = seg.EndUtc ?? nowUtc;
+            double dur = (end - seg.StartUtc).TotalSeconds;
+            if (dur <= 0)
+            {
+                continue;
+            }
+
+            _ = speaking.TryGetValue(seg.SpeakerKey, out double cur);
+            speaking[seg.SpeakerKey] = cur + dur;
+            _ = names.TryAdd(seg.SpeakerKey, seg.DisplayName);
+        }
+
+        // Turns
+        Dictionary<string, int> turns = new(StringComparer.OrdinalIgnoreCase);
+        foreach (SpeakerSegment seg in _segments)
+        {
+            _ = turns.TryGetValue(seg.SpeakerKey, out int t);
+            turns[seg.SpeakerKey] = t + 1;
+        }
+
+        // Interruptions (same heuristic as StopAndBuild, using nowUtc for open segment ends)
+        Dictionary<string, int> interruptions = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 1; i < _segments.Count; i++)
+        {
+            SpeakerSegment prev = _segments[i - 1];
+            SpeakerSegment cur = _segments[i];
+            DateTime prevEnd = prev.EndUtc ?? nowUtc;
+            TimeSpan gap = cur.StartUtc - prevEnd;
+            if (gap < TimeSpan.FromMilliseconds(500))
+            {
+                _ = interruptions.TryGetValue(cur.SpeakerKey, out int c);
+                interruptions[cur.SpeakerKey] = c + 1;
+            }
+        }
+
+        const double wSpeak = 1.0;
+        const double wTurns = 5.0;
+        const double wInterrupt = 3.0;
+        Dictionary<string, double> scores = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string spk in speaking.Keys.Union(turns.Keys, StringComparer.OrdinalIgnoreCase).Union(interruptions.Keys, StringComparer.OrdinalIgnoreCase))
+        {
+            _ = speaking.TryGetValue(spk, out double sec);
+            _ = turns.TryGetValue(spk, out int t);
+            _ = interruptions.TryGetValue(spk, out int intr);
+            scores[spk] = (wSpeak * sec) + (wTurns * t) - (wInterrupt * intr);
+        }
+
+        return [.. scores
             .OrderByDescending(kvp => kvp.Value)
             .Take(Math.Clamp(top, 1, 10))
             .Select(kvp => (kvp.Key, names.TryGetValue(kvp.Key, out string? n) ? n : null, kvp.Value))];

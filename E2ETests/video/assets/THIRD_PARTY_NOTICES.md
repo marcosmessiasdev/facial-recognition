@@ -11,6 +11,10 @@ Downloaded as 512px thumbnails from Wikimedia Commons:
 - `face3.jpg` — source file: `File:Sally_Ride_(1984).jpg` (NASA / public domain)
 - `face4.jpg` — source file: `File:Mae_Carol_Jemison.jpg` (NASA / public domain)
 
+## Animated GIFs (talking faces)
+
+- `face1.gif` … `face6.gif` — user-provided test fixtures (local project files). If you redistribute this repository, replace these with properly licensed assets or remove GIF mode (use `?gif=none`).
+
 ## Audio (speech)
 
 - `speech.ogg` — source file: `File:En-us-introduction.ogg` (Wikimedia Commons; public domain/self)

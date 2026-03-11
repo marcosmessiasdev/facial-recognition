@@ -62,8 +62,33 @@ public class AppConfig
     /// </summary>
     public string AudioSource { get; set; } = "loopback";
 
+    /// <summary>
+    /// Optional path to a test audio file (WAV) used when <see cref="AudioSource"/> is "test".
+    /// This is primarily intended for offline/reproducible E2E tests.
+    /// </summary>
+    public string? AudioTestFile { get; set; }
+
+    /// <summary>
+    /// If true, loops the test audio file when it reaches the end.
+    /// </summary>
+    public bool AudioTestLoop { get; set; } = true;
+
+    /// <summary>
+    /// Optional initial silence (ms) before playing test audio. Helps align audio/video in tests.
+    /// </summary>
+    public int AudioTestInitialSilenceMs { get; set; }
+
     /// <summary>Minimum probability threshold for VAD to consider a signal as speech.</summary>
-    public float AudioVadSpeechThreshold { get; set; } = 0.6f;
+    public float AudioVadSpeechThreshold { get; set; } = 0.005f;
+
+    /// <summary>Minimum time (ms) the VAD must remain above the threshold before switching to speech-active.</summary>
+    public int AudioVadMinSpeechMs { get; set; } = 120;
+
+    /// <summary>Minimum time (ms) the VAD must remain below the threshold before switching to speech-inactive.</summary>
+    public int AudioVadMinSilenceMs { get; set; } = 120;
+
+    /// <summary>Hangover (ms) to keep speech active after the last above-threshold frame.</summary>
+    public int AudioVadHangoverMs { get; set; } = 350;
 
     /// <summary>Frame size for audio analysis buffers.</summary>
     public int AudioVadFrameSizeSamples { get; set; } = 512;
@@ -71,17 +96,17 @@ public class AppConfig
     /// <summary>Sample rate for incoming loopback audio.</summary>
     public int AudioVadSampleRateHz { get; set; } = 16000;
 
-        /// <summary>
-        /// Optional output device selector for loopback capture (matches device ID or a substring of FriendlyName).
-        /// If null/empty, the default render endpoint is used.
-        /// </summary>
-        public string? AudioLoopbackDevice { get; set; }
+    /// <summary>
+    /// Optional output device selector for loopback capture (matches device ID or a substring of FriendlyName).
+    /// If null/empty, the default render endpoint is used.
+    /// </summary>
+    public string? AudioLoopbackDevice { get; set; }
 
-        /// <summary>
-        /// Optional input device selector for microphone capture (matches device ID or a substring of FriendlyName).
-        /// If null/empty, the default capture endpoint is used.
-        /// </summary>
-        public string? AudioMicrophoneDevice { get; set; }
+    /// <summary>
+    /// Optional input device selector for microphone capture (matches device ID or a substring of FriendlyName).
+    /// If null/empty, the default capture endpoint is used.
+    /// </summary>
+    public string? AudioMicrophoneDevice { get; set; }
 
     /// <summary>
     /// If true, highlights the most likely speaker using visual mouth motion even when audio VAD is inactive.
@@ -137,6 +162,9 @@ public class AppConfig
     /// <summary>Language hint for transcription (e.g. "pt", "en", or "auto").</summary>
     public string TranscriptionLanguage { get; set; } = "pt";
 
+    /// <summary>Minimum (ms) duration of a VAD segment before it is sent to Whisper.</summary>
+    public int TranscriptionMinSegmentMs { get; set; } = 800;
+
     /// <summary>Max seconds per transcription segment.</summary>
     public int TranscriptionMaxSegmentSeconds { get; set; } = 12;
 
@@ -158,17 +186,17 @@ public class AppConfig
     /// <summary>Hop size (ms) between diarization windows.</summary>
     public int DiarizationHopMs { get; set; } = 750;
 
-        /// <summary>Relative path to the speaker embedding model (ONNX).</summary>
-        public string ModelSpeakerEmbedding { get; set; } = "onnx/nemo_en_titanet_small.onnx";
+    /// <summary>Relative path to the speaker embedding model (ONNX).</summary>
+    public string ModelSpeakerEmbedding { get; set; } = "onnx/nemo_en_titanet_small.onnx";
 
-        /// <summary>Enables or disables multimodal ASD (TalkNet ONNX).</summary>
-        public bool EnableTalkNetAsd { get; set; } = true;
+    /// <summary>Enables or disables multimodal ASD (TalkNet ONNX).</summary>
+    public bool EnableTalkNetAsd { get; set; } = true;
 
-        /// <summary>Temporal window size in frames for TalkNet (typically 25 for 1s @25fps).</summary>
-        public int TalkNetWindowFrames { get; set; } = 25;
+    /// <summary>Temporal window size in frames for TalkNet (typically 25 for 1s @25fps).</summary>
+    public int TalkNetWindowFrames { get; set; } = 25;
 
-        /// <summary>Relative path to the TalkNet ASD ONNX model.</summary>
-        public string ModelTalkNetAsd { get; set; } = "onnx/talknet_asd.onnx";
+    /// <summary>Relative path to the TalkNet ASD ONNX model.</summary>
+    public string ModelTalkNetAsd { get; set; } = "onnx/talknet_asd.onnx";
 
     /// <summary>
     /// Loads configuration from appsettings.json relative to the application base directory.
@@ -183,6 +211,7 @@ public class AppConfig
         IConfigurationRoot config = new ConfigurationBuilder()
             .SetBasePath(basedir)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+            .AddEnvironmentVariables()
             .Build();
 
         AppConfig appConfig = new();

@@ -69,20 +69,30 @@
             </ListBox.ItemTemplate>
         </ListBox>
 
-        <!-- Refresh Button -->
-        <Button x:Name="RefreshButton"
-                AutomationProperties.AutomationId="RefreshButton"
-                Grid.Row="3"
-                Content="🔄  Atualizar Lista"
-                Margin="0,10,0,0"
-                Padding="12,6"
-                FontSize="12"
-                Cursor="Hand"
-                HorizontalAlignment="Left"
-                Background="#45475A"
-                Foreground="#CDD6F4"
-                BorderThickness="0"
-                Click="RefreshButton_Click"/>
+        <!-- Refresh + Demo -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Left">
+            <Button x:Name="RefreshButton"
+                    AutomationProperties.AutomationId="RefreshButton"
+                    Content="🔄  Atualizar Lista"
+                    Padding="12,6"
+                    FontSize="12"
+                    Cursor="Hand"
+                    Background="#45475A"
+                    Foreground="#CDD6F4"
+                    BorderThickness="0"
+                    Click="RefreshButton_Click"/>
+            <Button x:Name="DemoButton"
+                    AutomationProperties.AutomationId="DemoButton"
+                    Content="🧪  Abrir Demo Offline"
+                    Margin="8,0,0,0"
+                    Padding="12,6"
+                    FontSize="12"
+                    Cursor="Hand"
+                    Background="#45475A"
+                    Foreground="#CDD6F4"
+                    BorderThickness="0"
+                    Click="DemoButton_Click"/>
+        </StackPanel>
 
         <!-- Start / Stop -->
         <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Right">

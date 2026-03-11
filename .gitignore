@@ -31,6 +31,9 @@ capture_debug.txt
 ## Test results
 TestResults/
 
+## Local E2E-only fixtures (avoid committing user-provided media)
+E2ETests/video/assets/*.gif
+
 ## OS specific
 .DS_Store
 Thumbs.db

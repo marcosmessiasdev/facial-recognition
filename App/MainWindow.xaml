@@ -1,0 +1,121 @@
+<Window x:Class="FacialRecognitionApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:FacialRecognitionApp"
+        mc:Ignorable="d"
+        Title="Facial Recognition — Seletor de Janela" 
+        Height="520" Width="600"
+        WindowStartupLocation="CenterScreen"
+        Background="#1E1E2E">
+    
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Title -->
+        <TextBlock Grid.Row="0"
+                   Text="🎯 Facial Recognition"
+                   FontSize="22" FontWeight="Bold"
+                   Foreground="#CDD6F4"
+                   Margin="0,0,0,6"/>
+
+        <TextBlock Grid.Row="1"
+                   Text="Selecione a janela que deseja monitorar:"
+                   FontSize="13"
+                   Foreground="#A6ADC8"
+                   Margin="0,0,0,12"/>
+
+        <!-- Window List -->
+        <ListBox x:Name="WindowListBox"
+                 x:Uid="WindowListBox"
+                 AutomationProperties.AutomationId="WindowListBox"
+                 Grid.Row="2"
+                 Background="#313244"
+                 BorderBrush="#45475A"
+                 BorderThickness="1"
+                 Foreground="#CDD6F4"
+                 FontSize="13"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 SelectionChanged="WindowListBox_SelectionChanged">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="10,6"/>
+                    <Setter Property="Cursor" Value="Hand"/>
+                    <Style.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Background" Value="#89B4FA"/>
+                            <Setter Property="Foreground" Value="#1E1E2E"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Background" Value="#45475A"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🪟 " FontSize="13"/>
+                        <TextBlock Text="{Binding Title}" FontSize="13"/>
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <!-- Refresh Button -->
+        <Button x:Name="RefreshButton"
+                AutomationProperties.AutomationId="RefreshButton"
+                Grid.Row="3"
+                Content="🔄  Atualizar Lista"
+                Margin="0,10,0,0"
+                Padding="12,6"
+                FontSize="12"
+                Cursor="Hand"
+                HorizontalAlignment="Left"
+                Background="#45475A"
+                Foreground="#CDD6F4"
+                BorderThickness="0"
+                Click="RefreshButton_Click"/>
+
+        <!-- Start / Stop -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,10,0,0" HorizontalAlignment="Right">
+            <TextBlock x:Name="StatusText"
+                       AutomationProperties.AutomationId="StatusText"
+                       Text="Nenhuma janela selecionada"
+                       VerticalAlignment="Center"
+                       Foreground="#A6ADC8"
+                       FontSize="12"
+                       Margin="0,0,16,0"/>
+            <Button x:Name="StartButton"
+                    AutomationProperties.AutomationId="StartButton"
+                    Content="▶  Iniciar Análise"
+                    Padding="16,8"
+                    FontSize="13" FontWeight="SemiBold"
+                    Cursor="Hand"
+                    IsEnabled="False"
+                    Background="#A6E3A1"
+                    Foreground="#1E1E2E"
+                    BorderThickness="0"
+                    Click="StartButton_Click"/>
+            <Button x:Name="StopButton"
+                    AutomationProperties.AutomationId="StopButton"
+                    Content="⏹  Parar"
+                    Padding="16,8"
+                    FontSize="13" FontWeight="SemiBold"
+                    Cursor="Hand"
+                    Margin="8,0,0,0"
+                    Visibility="Collapsed"
+                    Background="#F38BA8"
+                    Foreground="#1E1E2E"
+                    BorderThickness="0"
+                    Click="StopButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

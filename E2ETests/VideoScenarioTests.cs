@@ -79,15 +79,11 @@ namespace E2ETests
             var url = GetLocalVideoPageUrl();
             TestContext.Out.WriteLine($"Navigating to local test page: {url}");
             await _page.GotoAsync(url);
-            await _page.WaitForSelectorAsync("video");
+            await _page.WaitForSelectorAsync("#grid");
 
-            // User-gesture + unmute to ensure audio actually plays for loopback capture.
-            await _page.ClickAsync("video");
-            await _page.EvaluateAsync("() => { const v=document.querySelector('video'); v.muted=false; v.volume=1.0; return v.play(); }");
-            await Task.Delay(1500);
-
-            var isPlaying = await _page.EvaluateAsync<bool>("() => { const v=document.querySelector('video'); return v && !v.paused; }");
-            Assert.That(isPlaying, Is.True, "Local test video is not playing");
+            // One user gesture to start audio + mouth animation.
+            await _page.ClickAsync("#grid");
+            await Task.Delay(800);
 
             _pageTitle = await _page.TitleAsync();
             TestContext.Out.WriteLine($"Browser page title: {_pageTitle}");

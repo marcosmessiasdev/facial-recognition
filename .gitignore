@@ -28,15 +28,6 @@ appsettings.Development.json
 .tmp_*
 capture_debug.txt
 
-## Machine Learning Models (Usually too large for Git)
-*.onnx
-*.mar
-*.prototxt
-*.caffemodel
-*.bin
-*.pt
-*.pth
-
 ## Test results
 TestResults/
 

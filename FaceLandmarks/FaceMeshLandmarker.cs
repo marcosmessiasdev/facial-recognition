@@ -23,7 +23,7 @@ public sealed class FaceMeshLandmarker : IDisposable
 
     private readonly InferenceSession _session;
     private readonly string _imageInputName;
-    private readonly IReadOnlyList<(string Name, Type ElementType)> _extraInputs;
+    private readonly IReadOnlyList<(string Name, Type ElementType, int[] Dims)> _extraInputs;
     private readonly string _landmarksOutputName;
 
     public FaceMeshLandmarker(string modelPath)
@@ -37,7 +37,7 @@ public sealed class FaceMeshLandmarker : IDisposable
 
         _extraInputs = _session.InputMetadata
             .Where(kvp => kvp.Key != _imageInputName)
-            .Select(kvp => (kvp.Key, kvp.Value.ElementType))
+            .Select(kvp => (kvp.Key, kvp.Value.ElementType, kvp.Value.Dimensions))
             .ToArray();
 
         _landmarksOutputName = _session.OutputMetadata.Keys.FirstOrDefault(k => k.Contains("landmark", StringComparison.OrdinalIgnoreCase))
@@ -68,9 +68,9 @@ public sealed class FaceMeshLandmarker : IDisposable
         };
 
         // Best-effort support for "postprocess" models that require crop parameters.
-        foreach (var (name, elementType) in _extraInputs)
+        foreach (var (name, elementType, dims) in _extraInputs)
         {
-            inputs.Add(ScalarTensorFor(name, elementType));
+            inputs.Add(ScalarTensorFor(name, elementType, dims));
         }
 
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
@@ -156,7 +156,7 @@ public sealed class FaceMeshLandmarker : IDisposable
         return tensor;
     }
 
-    private static NamedOnnxValue ScalarTensorFor(string name, Type elementType)
+    private static NamedOnnxValue ScalarTensorFor(string name, Type elementType, int[] dims)
     {
         // Many postprocess variants take crop coords; for our per-face crop usage we can pass zeros/size.
         float v =
@@ -164,22 +164,32 @@ public sealed class FaceMeshLandmarker : IDisposable
             name.Contains("y2", StringComparison.OrdinalIgnoreCase) ? InputSize :
             0f;
 
+        var shape = dims.Length == 0 ? new[] { 1 } : dims.Select(d => d > 0 ? d : 1).ToArray();
+
         if (elementType == typeof(float))
         {
-            return NamedOnnxValue.CreateFromTensor(name, new DenseTensor<float>(new[] { 1 }) { [0] = v });
+            var t = new DenseTensor<float>(shape);
+            t.Buffer.Span[0] = v;
+            return NamedOnnxValue.CreateFromTensor(name, t);
         }
 
         if (elementType == typeof(int))
         {
-            return NamedOnnxValue.CreateFromTensor(name, new DenseTensor<int>(new[] { 1 }) { [0] = (int)MathF.Round(v) });
+            var t = new DenseTensor<int>(shape);
+            t.Buffer.Span[0] = (int)MathF.Round(v);
+            return NamedOnnxValue.CreateFromTensor(name, t);
         }
 
         if (elementType == typeof(long))
         {
-            return NamedOnnxValue.CreateFromTensor(name, new DenseTensor<long>(new[] { 1 }) { [0] = (long)MathF.Round(v) });
+            var t = new DenseTensor<long>(shape);
+            t.Buffer.Span[0] = (long)MathF.Round(v);
+            return NamedOnnxValue.CreateFromTensor(name, t);
         }
 
-        return NamedOnnxValue.CreateFromTensor(name, new DenseTensor<float>(new[] { 1 }) { [0] = v });
+        var tf = new DenseTensor<float>(shape);
+        tf.Buffer.Span[0] = v;
+        return NamedOnnxValue.CreateFromTensor(name, tf);
     }
 
     private readonly record struct Pt(float X, float Y);

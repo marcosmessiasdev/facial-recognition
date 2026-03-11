@@ -67,12 +67,13 @@ O projeto possui uma documentação extensa dividida por áreas de interesse:
 - Placa de vídeo compatível com DirectX 11 (para captura acelerada).
 
 ### Instalação
-1. Clone o repositório:
+1. Clone o repositório. O projeto utiliza **Git LFS** para gerenciar os modelos de IA:
    ```bash
    git clone git@github.com:marcosmessiasdev/facial-recognition.git
+   cd facial-recognition
+   git lfs pull
    ```
-2. Baixe os modelos ONNX necessários e coloque-os na pasta `/onnx` (veja [AppConfig.cs](Config/AppConfig.cs) para os nomes esperados).
-3. Compile o projeto:
+2. Compile o projeto:
    ```bash
    dotnet build
    ```

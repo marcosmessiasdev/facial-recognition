@@ -1,0 +1,45 @@
+# .gitignore for .NET C# Facial Recognition project
+
+## Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ist/
+[Bb]uild/
+
+## IDE specific
+.vs/
+.idea/
+.vscode/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+
+## Database and sensitive data
+*.db
+*.db-shm
+*.db-wal
+appsettings.Development.json
+
+## Logs and temporary files
+[Ll]ogs/
+*.log
+.tmp_*/
+.tmp_*
+capture_debug.txt
+
+## Machine Learning Models (Usually too large for Git)
+*.onnx
+*.mar
+*.prototxt
+*.caffemodel
+*.bin
+*.pt
+*.pth
+
+## Test results
+TestResults/
+
+## OS specific
+.DS_Store
+Thumbs.db

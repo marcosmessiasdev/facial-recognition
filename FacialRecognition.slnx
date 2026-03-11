@@ -1,0 +1,23 @@
+<Solution>
+  <Project Path="App/App.csproj" />
+  <Project Path="Config/Config.csproj" />
+  <Project Path="E2ETests/E2ETests.csproj" />
+  <Project Path="EmotionAnalysis/EmotionAnalysis.csproj" />
+  <Project Path="AgeAnalysis/AgeAnalysis.csproj" />
+  <Project Path="GenderAnalysis/GenderAnalysis.csproj" />
+  <Project Path="FaceDetection/FaceDetection.csproj" />
+  <Project Path="FaceAttributes/FaceAttributes.csproj" />
+  <Project Path="FaceLandmarks/FaceLandmarks.csproj" />
+  <Project Path="AudioProcessing/AudioProcessing.csproj" />
+  <Project Path="SpeakerDetection/SpeakerDetection.csproj" />
+  <Project Path="MeetingAnalytics/MeetingAnalytics.csproj" />
+  <Project Path="SpeechProcessing/SpeechProcessing.csproj" />
+  <Project Path="FaceRecognition/FaceRecognition.csproj" />
+  <Project Path="FaceTracking/FaceTracking.csproj" />
+  <Project Path="FramePipeline/FramePipeline.csproj" />
+  <Project Path="IdentityStore/IdentityStore.csproj" />
+  <Project Path="Logging/Logging.csproj" />
+  <Project Path="OverlayRenderer/OverlayRenderer.csproj" />
+  <Project Path="VisionEngine/VisionEngine.csproj" />
+  <Project Path="WindowCapture/WindowCapture.csproj" />
+</Solution>

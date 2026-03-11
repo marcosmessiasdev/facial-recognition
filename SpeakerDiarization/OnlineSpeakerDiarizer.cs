@@ -35,11 +35,31 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
     private bool _inSpeech;
     private TimeSpan _lastSpeechTime;
     private readonly TimeSpan _hangover = TimeSpan.FromMilliseconds(Math.Clamp(hangoverMs, 0, 2000));
+    private int _samplesProcessedInSpeech;
+    private int _lastWindowStartSample;
+    private int _currentSpeakerId;
+    private float _currentSpeakerScore;
+    private readonly Queue<(int SpeakerId, float Score)> _recentAssignments = new();
+    private const int RecentAssignmentWindow = 5;
+
+    // Guards against speaker ID fragmentation when embeddings are noisy.
+    private int _pendingNewWindows;
+    private int _pendingNewBestId;
+    private float _pendingNewBestScore;
+    private const int NewClusterConfirmWindows = 3;
+    private const float NearThresholdMargin = 0.06f;
+    private const float NearThresholdUpdateWeight = 0.05f;
+    private const float MinRmsForEmbedding = 0.003f;
 
     /// <summary>
     /// Triggered when a grouped chunk of speech is finalized and assigned a specific cluster ID.
     /// </summary>
     public event EventHandler<AudioSpeakerSegment>? SegmentReady;
+
+    /// <summary>
+    /// Fired during active speech when a best-effort current speaker ID is updated (low latency).
+    /// </summary>
+    public event EventHandler<(TimeSpan Offset, int SpeakerId, float Confidence)>? ActiveSpeakerUpdated;
 
     /// <summary>
     /// Processes incoming raw audio samples under the guidance of an external VAD.
@@ -49,6 +69,8 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
     /// <param name="speechActive">True if speech was detected concurrently.</param>
     public void PushFrame(float[] samples16kMono, TimeSpan timestamp, bool speechActive)
     {
+        ArgumentNullException.ThrowIfNull(samples16kMono);
+
         if (speechActive)
         {
             if (!_inSpeech)
@@ -56,6 +78,14 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
                 _inSpeech = true;
                 _speechStart = timestamp;
                 _speechBuffer.Clear();
+                _samplesProcessedInSpeech = 0;
+                _lastWindowStartSample = 0;
+                _currentSpeakerId = 0;
+                _currentSpeakerScore = 0;
+                _recentAssignments.Clear();
+                _pendingNewWindows = 0;
+                _pendingNewBestId = 0;
+                _pendingNewBestScore = 0f;
             }
             _lastSpeechTime = timestamp;
         }
@@ -63,6 +93,52 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
         if (_inSpeech)
         {
             _speechBuffer.AddRange(samples16kMono);
+            _samplesProcessedInSpeech += samples16kMono.Length;
+
+            // Low-latency incremental assignment: as soon as we have a full window, compute/assign every hop.
+            while (_samplesProcessedInSpeech - _lastWindowStartSample >= _windowSamples)
+            {
+                float[] window = new float[_windowSamples];
+                int srcOffset = Math.Max(0, _samplesProcessedInSpeech - _windowSamples);
+                // Use the most recent window for responsiveness.
+                for (int i = 0; i < _windowSamples && (srcOffset + i) < _speechBuffer.Count; i++)
+                {
+                    window[i] = _speechBuffer[srcOffset + i];
+                }
+
+                if (Rms(window) >= MinRmsForEmbedding)
+                {
+                    float[] emb = _embedder.GetEmbedding(window);
+                    if (emb.Length > 0)
+                    {
+                        (int sid, float score) = Assign(emb);
+                        PushRecentAssignment(sid, score);
+                        (int stableId, float stableScore) = GetStableRecentAssignment();
+                        if (stableId != _currentSpeakerId || MathF.Abs(stableScore - _currentSpeakerScore) > 0.05f)
+                        {
+                            _currentSpeakerId = stableId;
+                            _currentSpeakerScore = stableScore;
+                            ActiveSpeakerUpdated?.Invoke(this, (timestamp, stableId, stableScore));
+                        }
+                    }
+                }
+
+                _lastWindowStartSample += _hopSamples;
+                if (_lastWindowStartSample < 0)
+                {
+                    _lastWindowStartSample = 0;
+                }
+
+                // Avoid unbounded buffer growth: keep only last few seconds.
+                int maxKeep = Math.Max(_windowSamples * 4, _windowSamples + _hopSamples);
+                if (_speechBuffer.Count > maxKeep)
+                {
+                    int remove = _speechBuffer.Count - maxKeep;
+                    _speechBuffer.RemoveRange(0, remove);
+                    _samplesProcessedInSpeech -= remove;
+                    _lastWindowStartSample = Math.Max(0, _lastWindowStartSample - remove);
+                }
+            }
 
             TimeSpan silentFor = timestamp - _lastSpeechTime;
             if (!speechActive && silentFor >= _hangover)
@@ -83,6 +159,14 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
             FinalizeSpeech(endTimestamp);
             _inSpeech = false;
             _speechBuffer.Clear();
+            _samplesProcessedInSpeech = 0;
+            _lastWindowStartSample = 0;
+            _currentSpeakerId = 0;
+            _currentSpeakerScore = 0;
+            _recentAssignments.Clear();
+            _pendingNewWindows = 0;
+            _pendingNewBestId = 0;
+            _pendingNewBestScore = 0f;
         }
     }
 
@@ -105,6 +189,11 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
             float[] window = new float[_windowSamples];
             Array.Copy(pcm, offset, window, 0, _windowSamples);
 
+            if (Rms(window) < MinRmsForEmbedding)
+            {
+                continue;
+            }
+
             float[] emb = _embedder.GetEmbedding(window);
             if (emb.Length == 0)
             {
@@ -123,6 +212,8 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
         {
             SegmentReady?.Invoke(this, seg);
         }
+
+        MergeSimilarClusters();
     }
 
     private (int SpeakerId, float Score) Assign(float[] emb)
@@ -131,6 +222,7 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
         {
             SpeakerCluster c = new(id: 1, emb);
             _clusters.Add(c);
+            _pendingNewWindows = 0;
             return (c.Id, 1f);
         }
 
@@ -146,16 +238,34 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
             }
         }
 
-        if (best >= _assignThreshold && bestId > 0)
+        if (bestId > 0 && best >= _assignThreshold)
         {
-            _clusters.First(c => c.Id == bestId).Update(emb);
+            _pendingNewWindows = 0;
+            _clusters.First(c => c.Id == bestId).UpdateWeighted(emb, weight: 1f);
             return (bestId, best);
         }
 
-        int newId = _clusters.Max(c => c.Id) + 1;
-        SpeakerCluster nc = new(newId, emb);
-        _clusters.Add(nc);
-        return (newId, best);
+        if (bestId > 0 && best >= (_assignThreshold - NearThresholdMargin))
+        {
+            _pendingNewWindows = 0;
+            _clusters.First(c => c.Id == bestId).UpdateWeighted(emb, weight: NearThresholdUpdateWeight);
+            return (bestId, best);
+        }
+
+        _pendingNewWindows++;
+        _pendingNewBestId = bestId;
+        _pendingNewBestScore = best;
+
+        if (_pendingNewWindows >= NewClusterConfirmWindows)
+        {
+            _pendingNewWindows = 0;
+            int newId = _clusters.Max(c => c.Id) + 1;
+            SpeakerCluster nc = new(newId, emb);
+            _clusters.Add(nc);
+            return (newId, Math.Max(0f, best));
+        }
+
+        return (bestId > 0 ? bestId : 1, Math.Max(0f, best));
     }
 
     private static IEnumerable<AudioSpeakerSegment> Merge(List<(TimeSpan Start, TimeSpan End, int SpeakerId, float Score)> segs)
@@ -205,19 +315,115 @@ public sealed class OnlineSpeakerDiarizer(string embeddingModelPath, int sampleR
         _embedder.Dispose();
     }
 
+    private void PushRecentAssignment(int speakerId, float score)
+    {
+        _recentAssignments.Enqueue((speakerId, score));
+        while (_recentAssignments.Count > RecentAssignmentWindow)
+        {
+            _ = _recentAssignments.Dequeue();
+        }
+    }
+
+    private (int SpeakerId, float Score) GetStableRecentAssignment()
+    {
+        if (_recentAssignments.Count == 0)
+        {
+            return (0, 0f);
+        }
+
+        Dictionary<int, (int Count, float BestScore)> counts = new();
+        foreach ((int SpeakerId, float Score) a in _recentAssignments)
+        {
+            if (!counts.TryGetValue(a.SpeakerId, out (int Count, float BestScore) cur))
+            {
+                counts[a.SpeakerId] = (1, a.Score);
+            }
+            else
+            {
+                counts[a.SpeakerId] = (cur.Count + 1, Math.Max(cur.BestScore, a.Score));
+            }
+        }
+
+        KeyValuePair<int, (int Count, float BestScore)> best = counts
+            .OrderByDescending(kvp => kvp.Value.Count)
+            .ThenByDescending(kvp => kvp.Value.BestScore)
+            .First();
+        return (best.Key, best.Value.BestScore);
+    }
+
+    private void MergeSimilarClusters()
+    {
+        if (_clusters.Count < 2)
+        {
+            return;
+        }
+
+        float mergeThreshold = Math.Min(0.9f, _assignThreshold + 0.16f);
+
+        bool mergedAny;
+        do
+        {
+            mergedAny = false;
+            for (int i = 0; i < _clusters.Count; i++)
+            {
+                for (int j = i + 1; j < _clusters.Count; j++)
+                {
+                    SpeakerCluster a = _clusters[i];
+                    SpeakerCluster b = _clusters[j];
+                    float s = Cosine(a.Centroid, b.Centroid);
+                    if (s < mergeThreshold)
+                    {
+                        continue;
+                    }
+
+                    SpeakerCluster keep = a.Count >= b.Count ? a : b;
+                    SpeakerCluster drop = a.Count >= b.Count ? b : a;
+                    keep.UpdateWeighted(drop.Centroid, weight: 0.25f);
+                    _clusters.Remove(drop);
+                    mergedAny = true;
+                    break;
+                }
+
+                if (mergedAny)
+                {
+                    break;
+                }
+            }
+        } while (mergedAny && _clusters.Count >= 2);
+    }
+
+    private static float Rms(float[] x)
+    {
+        if (x.Length == 0) return 0f;
+        double sum = 0;
+        for (int i = 0; i < x.Length; i++)
+        {
+            double v = x[i];
+            sum += v * v;
+        }
+        return (float)Math.Sqrt(sum / x.Length);
+    }
+
     private sealed class SpeakerCluster(int id, float[] emb)
     {
         public int Id { get; } = id;
         public float[] Centroid { get; private set; } = (float[])emb.Clone();
         private int _count = 1;
 
-        public void Update(float[] emb)
+        public int Count => _count;
+
+        public void UpdateWeighted(float[] emb, float weight)
         {
+            weight = Math.Clamp(weight, 0f, 1f);
+            if (weight <= 0f)
+            {
+                return;
+            }
+
             _count++;
-            float alpha = 1f / _count;
             for (int i = 0; i < Centroid.Length && i < emb.Length; i++)
             {
-                Centroid[i] = ((1 - alpha) * Centroid[i]) + (alpha * emb[i]);
+                Centroid[i] = ((1 - weight) * Centroid[i]) + (weight * emb[i]);
             }
         }
     }

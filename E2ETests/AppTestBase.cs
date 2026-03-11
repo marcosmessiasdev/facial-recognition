@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Exceptions;
 using FlaUI.UIA3;
 
 namespace E2ETests;
@@ -17,6 +19,54 @@ public abstract class AppTestBase
     protected Application? App { get; private set; }
     protected UIA3Automation Automation => _automation ?? throw new InvalidOperationException("Automation is not initialized yet.");
     protected Window? MainWindow { get; private set; }
+
+    protected void RefreshMainWindow(int timeoutSeconds = 10)
+    {
+        if (App == null)
+        {
+            throw new InvalidOperationException("App is not initialized yet.");
+        }
+
+        MainWindow = App.GetMainWindow(Automation, TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 60)));
+    }
+
+    protected T UiRetry<T>(Func<Window, T> action, int attempts = 6, int delayMs = 250)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        attempts = Math.Clamp(attempts, 1, 20);
+        delayMs = Math.Clamp(delayMs, 0, 2000);
+
+        Exception? last = null;
+        for (int i = 0; i < attempts; i++)
+        {
+            try
+            {
+                RefreshMainWindow(timeoutSeconds: 10);
+                if (MainWindow == null)
+                {
+                    throw new InvalidOperationException("Main window is not available.");
+                }
+
+                return action(MainWindow);
+            }
+            catch (COMException ex)
+            {
+                last = ex;
+            }
+            catch (ElementNotAvailableException ex)
+            {
+                last = ex;
+            }
+
+            if (i < attempts - 1 && delayMs > 0)
+            {
+                Thread.Sleep(delayMs);
+            }
+        }
+
+        throw new InvalidOperationException("UIAutomation failed repeatedly while interacting with the app window.", last);
+    }
 
     private static string FindAppExe()
     {
@@ -110,7 +160,7 @@ public abstract class AppTestBase
 
         // Default E2E configuration (offline + deterministic audio injection).
         // These can be overridden by environment variables already set on the machine.
-        string testAudio = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "marshall_plan_speech.wav");
+        string testAudio = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "e2e_fixture_10_words.wav");
 
         ProcessStartInfo psi = new(exePath)
         {

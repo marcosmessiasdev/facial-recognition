@@ -145,10 +145,10 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
     public async Task TestFullE2EVideoScenario()
     {
         // Verify window is listed in the dropdown
-        ListBox? listBox = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("WindowListBox"))?.AsListBox();
+        ListBox? listBox = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("WindowListBox"))?.AsListBox());
         Assert.That(listBox, Is.Not.Null, "Window list box not found");
 
-        Button? refreshBtn = MainWindow.FindFirstDescendant(cf => cf.ByAutomationId("RefreshButton"))?.AsButton();
+        Button? refreshBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("RefreshButton"))?.AsButton());
         refreshBtn?.Invoke();
         await Task.Delay(1000);
 
@@ -170,7 +170,7 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
         await Task.Delay(300);
 
         // Start pipeline
-        Button? startBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StartButton"))?.AsButton();
+        Button? startBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("StartButton"))?.AsButton());
         Assert.That(startBtn?.IsEnabled, Is.True, "Start button should be enabled");
         startBtn!.Click();
 
@@ -203,7 +203,7 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
         }
 
         // Stop pipeline
-        Button? stopBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton();
+        Button? stopBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton());
         Assert.That(stopBtn, Is.Not.Null, "StopButton not found");
         stopBtn!.Invoke();
         WaitForLogContainsAny(["VisionPipeline stopped", "Meeting session saved:"], timeoutMs: 120_000);
@@ -218,11 +218,11 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
 #pragma warning disable CA1707 // Compatibility with existing CI filter naming
     public async Task Test_PipelineStabilityOver30Seconds()
     {
-        Button? refreshBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("RefreshButton"))?.AsButton();
+        Button? refreshBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("RefreshButton"))?.AsButton());
         refreshBtn?.Invoke();
         await Task.Delay(500);
 
-        ListBox? listBox = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("WindowListBox"))?.AsListBox();
+        ListBox? listBox = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("WindowListBox"))?.AsListBox());
         WindowItem[] hwnds = GetHwndsFromListBox(listBox!);
         string titleHint = _pageTitle ?? "E2E Faces Grid";
         ListBoxItem? browserItem = listBox!.Items.FirstOrDefault(i =>
@@ -238,8 +238,9 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
 
         _ = browserItem.Select();
 
-        Button? startBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StartButton"))?.AsButton();
-        startBtn?.Invoke();
+        Button? startBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("StartButton"))?.AsButton());
+        Assert.That(startBtn, Is.Not.Null, "StartButton not found");
+        startBtn!.Invoke();
 
         // Run for 30 seconds of *actual capture* (do not count model load / UI automation time).
         WaitForLogContains("Capture started", timeoutMs: 120_000);
@@ -261,11 +262,13 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
         Assert.That(detectedFrames, Is.GreaterThan(0),
             "Expected at least one frame with detected faces during 30s run");
 
-        Button? stopBtn = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton();
-        stopBtn?.Invoke();
+        Button? stopBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton());
+        Assert.That(stopBtn, Is.Not.Null, "StopButton not found");
+        stopBtn!.Invoke();
 
         // Wait for audio-derived outputs to flush (STT + diarization + session JSON).
-        WaitForLogContainsAny(["Meeting session saved:", "VisionPipeline stopped"], timeoutMs: 90_000);
+        WaitForLogContains("Meeting session saved:", timeoutMs: 180_000);
+        WaitForLogContains("VisionPipeline stopped", timeoutMs: 180_000);
         WaitForLogContainsAny(["Transcript [", "Transcription failed"], timeoutMs: 90_000);
         WaitForLogContains("Diarization segment", timeoutMs: 90_000);
         await Task.Delay(500);

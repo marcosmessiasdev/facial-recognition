@@ -66,6 +66,11 @@
         .tile.speaking .mouth {
             height: 12%;
             background: rgba(0,0,0,0.35);
+            animation: mouthPulse 220ms ease-in-out infinite alternate;
+        }
+        @keyframes mouthPulse {
+            from { transform: translateX(-50%) scaleY(0.65); }
+            to { transform: translateX(-50%) scaleY(1.15); }
         }
         .hint {
             position: fixed;
@@ -115,8 +120,8 @@
 
     <div class="hint" id="hint">Click once to start audio (offline). Options: ?gif=all | ?gif=speaker&speaker=1&rotate=0</div>
 
-    <!-- Use the offline WAV fixture (>= 10-word sentence) so loopback mode is always meaningful. -->
-    <audio id="audio" src="../audio/marshall_plan_speech.wav" loop preload="auto"></audio>
+    <!-- Offline WAV fixture (contains a >=10-word sentence). -->
+    <audio id="audio" src="../audio/e2e_fixture_10_words.wav" loop preload="auto"></audio>
 
     <script>
         const audio = document.getElementById('audio');
@@ -126,10 +131,28 @@
         let lastActive = -1;
 
         const url = new URL(window.location.href);
+        const faces = parseInt(url.searchParams.get('faces') || '4', 10); // 4 | 6
+        const targetFaces = (faces === 6) ? 6 : 4;
         const gifMode = (url.searchParams.get('gif') || 'speaker').toLowerCase(); // 'speaker' | 'all' | 'none'
         const speakerParam = parseInt(url.searchParams.get('speaker') || '1', 10);
-        const preferredSpeaker = isFinite(speakerParam) ? Math.max(1, Math.min(tiles.length, speakerParam)) : 1;
+        const preferredSpeaker = isFinite(speakerParam) ? Math.max(1, Math.min(targetFaces, speakerParam)) : 1;
         const rotate = (url.searchParams.get('rotate') || '0') !== '0';
+
+        // Hide extra tiles and tune grid so the capture target always shows full faces (4 by default).
+        const grid = document.getElementById('grid');
+        const showTiles = tiles.slice(0, targetFaces);
+        tiles.forEach((tile, idx) => {
+            if (idx >= targetFaces) tile.style.display = 'none';
+        });
+        if (grid) {
+            if (targetFaces === 4) {
+                grid.style.gridTemplateColumns = '1fr 1fr';
+                grid.style.gridTemplateRows = '1fr 1fr';
+            } else {
+                grid.style.gridTemplateColumns = '1fr 1fr 1fr';
+                grid.style.gridTemplateRows = '1fr 1fr';
+            }
+        }
 
         const gifAvailability = new Map(); // url -> Promise<boolean>
 
@@ -147,6 +170,12 @@
             return p;
         }
 
+        function cacheBust(url) {
+            if (!url) return url;
+            const sep = url.includes('?') ? '&' : '?';
+            return url + sep + 'v=' + Date.now();
+        }
+
         function setImgMode(img, mode) {
             const jpg = img.getAttribute('data-jpg') || img.src;
             const gif = img.getAttribute('data-gif') || '';
@@ -156,7 +185,7 @@
                 img.dataset.targetMode = 'gif';
                 ensureGifAvailableUrl(gif).then((ok) => {
                     if (img.dataset.targetMode !== 'gif') return;
-                    const next = ok ? gif : jpg;
+                    const next = ok ? cacheBust(gif) : jpg;
                     if (img.dataset.currentSrc !== next) {
                         img.src = next;
                         img.dataset.currentSrc = next;
@@ -177,7 +206,7 @@
         }
 
         function applyGifPolicy(activeIdx) {
-            tiles.forEach((tile, idx) => {
+            showTiles.forEach((tile, idx) => {
                 const img = tile.querySelector('img');
                 if (!img) return;
                 if (gifMode === 'all') setImgMode(img, 'gif');
@@ -189,9 +218,9 @@
         function updateSpeaking() {
             if (!started) return;
             const t = audio.currentTime || 0;
-            const active = rotate ? (Math.floor(t) % tiles.length) : (preferredSpeaker - 1);
+            const active = rotate ? (Math.floor(t) % showTiles.length) : (preferredSpeaker - 1);
             if (active !== lastActive) {
-                tiles.forEach((el, idx) => el.classList.toggle('speaking', idx === active));
+                showTiles.forEach((el, idx) => el.classList.toggle('speaking', idx === active));
                 applyGifPolicy(active);
                 lastActive = active;
             }
@@ -219,7 +248,7 @@
 
         // Show an animated "speaker" tile immediately (even before audio starts),
         // so the capture target has obvious motion for debugging.
-        tiles.forEach((el, idx) => el.classList.toggle('speaking', idx === (preferredSpeaker - 1)));
+        showTiles.forEach((el, idx) => el.classList.toggle('speaking', idx === (preferredSpeaker - 1)));
         applyGifPolicy(preferredSpeaker - 1);
     </script>
 </body>

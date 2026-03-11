@@ -139,21 +139,34 @@ public sealed partial class GraphicsCaptureService : IDisposable
     /// </summary>
     private void StopCaptureInternal()
     {
-        _session?.Dispose();
+        GraphicsCaptureSession? session = _session;
+        Direct3D11CaptureFramePool? pool = _framePool;
+        GraphicsCaptureItem? item = _captureItem;
+
         _session = null;
+        _framePool = null;
+        _captureItem = null;
 
-        if (_framePool != null)
+        try
         {
-            _framePool.FrameArrived -= OnFrameArrived;
-            _framePool.Dispose();
-            _framePool = null;
+            if (pool != null)
+            {
+                pool.FrameArrived -= OnFrameArrived;
+            }
         }
+        catch { /* ignore */ }
 
-        if (_captureItem != null)
+        try { session?.Dispose(); } catch { /* ignore */ }
+        try { pool?.Dispose(); } catch { /* ignore */ }
+
+        try
         {
-            _captureItem.Closed -= OnCaptureItemClosed;
-            _captureItem = null;
+            if (item != null)
+            {
+                item.Closed -= OnCaptureItemClosed;
+            }
         }
+        catch { /* ignore */ }
 
         _vorticeContext?.Dispose();
         _vorticeContext = null;

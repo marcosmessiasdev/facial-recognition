@@ -91,6 +91,7 @@ public partial class VisionPipeline : IDisposable
     private volatile string? _lastTranscript;
     private OnlineSpeakerDiarizer? _diarizer;
     private int? _activeAudioSpeakerId;
+    private float _activeAudioSpeakerConfidence;
     private DateTime _lastAnalyticsUpdateUtc = DateTime.MinValue;
     private volatile bool _acceptAudioFrames;
     private readonly FaceTracker _tracker;
@@ -258,6 +259,7 @@ public partial class VisionPipeline : IDisposable
                     assignThreshold: _cfg.DiarizationAssignThreshold,
                     hangoverMs: _cfg.TranscriptionHangoverMs);
                 _diarizer.SegmentReady += OnAudioSpeakerSegmentReady;
+                _diarizer.ActiveSpeakerUpdated += OnActiveAudioSpeakerUpdated;
                 AppLogger.Instance.Information("Speaker diarization enabled: {Path}", embPath);
             }
             else
@@ -531,6 +533,7 @@ public partial class VisionPipeline : IDisposable
     private void OnAudioSpeakerSegmentReady(object? sender, SpeakerDiarization.AudioSpeakerSegment seg)
     {
         _activeAudioSpeakerId = seg.SpeakerId;
+        _activeAudioSpeakerConfidence = seg.Confidence;
         AppLogger.Instance.Information("Diarization segment speaker={Speaker} [{Start}-{End}] conf={Conf:0.00}",
             seg.SpeakerId, seg.Start, seg.End, seg.Confidence);
 
@@ -546,6 +549,17 @@ public partial class VisionPipeline : IDisposable
         {
             // ignore
         }
+    }
+
+    private void OnActiveAudioSpeakerUpdated(object? sender, (TimeSpan Offset, int SpeakerId, float Confidence) e)
+    {
+        if (e.SpeakerId <= 0)
+        {
+            return;
+        }
+
+        _activeAudioSpeakerId = e.SpeakerId;
+        _activeAudioSpeakerConfidence = e.Confidence;
     }
 
     /// <summary>
@@ -885,6 +899,7 @@ public partial class VisionPipeline : IDisposable
                             {
                                 (Emotion emotion, float conf) = _emotionClassifier.Classify(faceCrop);
                                 track.EmotionLabel = $"{emotion} {conf:P0}";
+                                _analytics?.AddEmotionSample(track, emotion.ToString(), conf, DateTime.UtcNow);
                             }
                             catch (Exception ex)
                             {
@@ -996,7 +1011,7 @@ public partial class VisionPipeline : IDisposable
                         int? audioSpk = _activeAudioSpeakerId;
                         if (audioSpk.HasValue)
                         {
-                            line1 += $" | DiarSpk={audioSpk.Value}";
+                            line1 += $" | DiarSpk={audioSpk.Value} conf={_activeAudioSpeakerConfidence:0.00}";
                         }
 
                         IReadOnlyList<(string SpeakerKey, string? DisplayName, double Seconds)>? top = _analytics?.GetSpeakingTimeSoFar(DateTime.UtcNow, top: 3);
@@ -1056,7 +1071,21 @@ public partial class VisionPipeline : IDisposable
         _acceptAudioFrames = false;
         _cancellationTokenSource?.Cancel();
         _ = (_pipelineTask?.Wait(TimeSpan.FromSeconds(3)));
-        _captureService.StopCapture();
+
+        try
+        {
+            // Capture shutdown can occasionally block due to GraphicsCapture/COM timing.
+            // Do not let it prevent meeting analytics persistence or clean stop logs.
+            Task stopCap = Task.Run(() => _captureService.StopCapture());
+            if (!stopCap.Wait(TimeSpan.FromSeconds(2)))
+            {
+                AppLogger.Instance.Warning("Capture stop timed out; continuing shutdown (resources will be released on process exit).");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Warning(ex, "Capture stop failed; continuing shutdown");
+        }
 
         try
         {
@@ -1081,6 +1110,20 @@ public partial class VisionPipeline : IDisposable
                 MeetingSession session = _analytics.StopAndBuild(DateTime.UtcNow);
                 string path = MeetingAnalyticsEngine.Persist(session, basedir);
                 AppLogger.Instance.Information("Meeting session saved: {Path}", path);
+
+                try
+                {
+                    string reportPath = MeetingReportGenerator.PersistHtml(session, basedir);
+                    string transcriptPath = MeetingReportGenerator.PersistTranscript(session, basedir);
+                    string timelinePath = MeetingReportGenerator.PersistSpeakerTimelineCsv(session, basedir);
+                    AppLogger.Instance.Information("Meeting report saved: {Path}", reportPath);
+                    AppLogger.Instance.Information("Meeting transcript saved: {Path}", transcriptPath);
+                    AppLogger.Instance.Information("Meeting timeline saved: {Path}", timelinePath);
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Warning(ex, "Failed to persist meeting report artifacts");
+                }
             }
         }
         catch (Exception ex)
@@ -1129,6 +1172,7 @@ public partial class VisionPipeline : IDisposable
         if (_diarizer != null)
         {
             _diarizer.SegmentReady -= OnAudioSpeakerSegmentReady;
+            _diarizer.ActiveSpeakerUpdated -= OnActiveAudioSpeakerUpdated;
         }
 
         _diarizer?.Dispose();

@@ -25,6 +25,9 @@ public sealed class MeetingSession
     /// <summary>Count of interruptions mapped by the person who interrupted.</summary>
     public required Dictionary<string, int> InterruptionsBySpeaker { get; init; }
 
+    /// <summary>Detailed interruption events (who interrupted whom, when, and overlap duration).</summary>
+    public required List<InterruptionEvent> InterruptionEvents { get; init; }
+
     /// <summary>Transcribed utterances aligned to the best matching speaker segment.</summary>
     public required List<Utterance> Utterances { get; init; }
 
@@ -42,6 +45,15 @@ public sealed class MeetingSession
 
     /// <summary>Conversation graph edges (who follows who in turn-taking).</summary>
     public required List<ConversationEdge> ConversationGraph { get; init; }
+
+    /// <summary>Emotion samples captured over time (per face track).</summary>
+    public required List<EmotionSample> EmotionSamples { get; init; }
+
+    /// <summary>Aggregated emotion counts across the whole meeting.</summary>
+    public required Dictionary<string, int> EmotionCountsOverall { get; init; }
+
+    /// <summary>Aggregated emotion counts by speaker key.</summary>
+    public required Dictionary<string, Dictionary<string, int>> EmotionCountsBySpeaker { get; init; }
 }
 
 /// <summary>
@@ -106,4 +118,22 @@ public sealed class ConversationEdge
     public required string FromSpeakerKey { get; init; }
     public required string ToSpeakerKey { get; init; }
     public int Count { get; init; }
+}
+
+public sealed class InterruptionEvent
+{
+    public required DateTime WhenUtc { get; init; }
+    public required string InterrupterSpeakerKey { get; init; }
+    public required string InterruptedSpeakerKey { get; init; }
+    public double OverlapSeconds { get; init; }
+}
+
+public sealed class EmotionSample
+{
+    public required DateTime WhenUtc { get; init; }
+    public required string SpeakerKey { get; init; }
+    public string? DisplayName { get; init; }
+    public int? TrackId { get; init; }
+    public required string Emotion { get; init; }
+    public float Confidence { get; init; }
 }

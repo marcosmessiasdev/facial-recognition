@@ -32,7 +32,7 @@ public sealed class WhisperSmokeTests
         string modelPath = Path.Combine(repoRoot, "App", "models", "whisper", "ggml-tiny.bin");
         Assert.That(File.Exists(modelPath), Is.True, $"Missing Whisper model at {modelPath}");
 
-        string wav = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "marshall_plan_speech.wav");
+        string wav = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "e2e_fixture_10_words.wav");
         Assert.That(File.Exists(wav), Is.True, $"Missing WAV fixture at {wav}");
 
         using WaveFileReader reader = new(wav);

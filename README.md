@@ -86,6 +86,13 @@ O projeto possui uma documentação extensa dividida por áreas de interesse:
    dotnet run --project App
    ```
 
+### Saídas (relatórios offline)
+Ao parar a análise (`⏹ Parar`), o app salva artefatos **localmente** na pasta `logs/` ao lado do `App.exe`:
+- `meeting_session_*.json` (timeline + métricas + transcrição + diarização + emoções)
+- `meeting_report_*.html` (relatório “corporativo” para abrir no navegador)
+- `meeting_transcript_*.txt` (transcrição por speaker)
+- `meeting_timeline_*.csv` (timeline por speaker/track)
+
 ### Demo offline (sem YouTube)
 - No app, use `🧪 Abrir Demo Offline` e depois selecione a janela do navegador na lista e clique em `▶ Iniciar Análise`.
 

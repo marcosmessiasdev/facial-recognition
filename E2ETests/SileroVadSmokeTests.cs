@@ -30,7 +30,7 @@ public sealed class SileroVadSmokeTests
     {
         string repoRoot = FindRepoRoot(TestContext.CurrentContext.TestDirectory);
         string modelPath = Path.Combine(repoRoot, "App", "onnx", "silero_vad.onnx");
-        string wav = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "marshall_plan_speech.wav");
+        string wav = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "e2e_fixture_10_words.wav");
         Assert.Multiple(() =>
         {
             Assert.That(File.Exists(modelPath), Is.True, $"Missing VAD model at {modelPath}");

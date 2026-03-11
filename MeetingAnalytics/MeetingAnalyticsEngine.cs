@@ -33,6 +33,7 @@ public sealed class MeetingAnalyticsEngine
     private readonly List<SpeakerSegment> _segments = new();
     private readonly List<Utterance> _utterances = new();
     private readonly List<AudioSpeakerSegment> _audioSegments = new();
+    private readonly List<EmotionSample> _emotionSamples = new();
     private readonly Dictionary<(int SpeakerId, int TrackId), int> _cooccurrence = new();
     private int? _activeTrackId;
 
@@ -81,6 +82,28 @@ public sealed class MeetingAnalyticsEngine
         });
     }
 
+    public void AddEmotionSample(Track track, string emotion, float confidence, DateTime whenUtc)
+    {
+        ArgumentNullException.ThrowIfNull(track);
+        if (string.IsNullOrWhiteSpace(emotion))
+        {
+            return;
+        }
+
+        string? display = NormalizeDisplayName(track.PersonName);
+        string key = display != null ? $"Name:{display}" : $"Track:{track.Id}";
+
+        _emotionSamples.Add(new EmotionSample
+        {
+            WhenUtc = whenUtc,
+            SpeakerKey = key,
+            DisplayName = display,
+            TrackId = track.Id,
+            Emotion = emotion.Trim(),
+            Confidence = Math.Clamp(confidence, 0f, 1f)
+        });
+    }
+
     /// <summary>
     /// Finalizes the current meeting session and builds an aggregate analytics report.
     /// </summary>
@@ -101,6 +124,7 @@ public sealed class MeetingAnalyticsEngine
             : [.. _segments];
 
         ResolveUtterancesWithAudioMapping(audioToFace);
+        ResolveEmotionSamplesWithAudioMapping(audioToFace);
 
         Dictionary<string, double> speaking = new(StringComparer.OrdinalIgnoreCase);
         foreach (SpeakerSegment seg in primarySegments)
@@ -120,23 +144,12 @@ public sealed class MeetingAnalyticsEngine
             speaking[seg.SpeakerKey] = cur + dur;
         }
 
-        // Interruptions (simple heuristic): if a speaker starts within 0.5s of previous segment end
+        List<InterruptionEvent> interruptionEvents = ComputeInterruptionEvents(primarySegments, endedAtUtc);
         Dictionary<string, int> interruptions = new(StringComparer.OrdinalIgnoreCase);
-        for (int i = 1; i < primarySegments.Count; i++)
+        foreach (InterruptionEvent e in interruptionEvents)
         {
-            SpeakerSegment prev = primarySegments[i - 1];
-            SpeakerSegment cur = primarySegments[i];
-            if (prev.EndUtc == null)
-            {
-                continue;
-            }
-
-            TimeSpan gap = cur.StartUtc - prev.EndUtc.Value;
-            if (gap < TimeSpan.FromMilliseconds(500))
-            {
-                _ = interruptions.TryGetValue(cur.SpeakerKey, out int count);
-                interruptions[cur.SpeakerKey] = count + 1;
-            }
+            _ = interruptions.TryGetValue(e.InterrupterSpeakerKey, out int c);
+            interruptions[e.InterrupterSpeakerKey] = c + 1;
         }
 
         // Turn-taking (count segments per speaker)
@@ -180,6 +193,8 @@ public sealed class MeetingAnalyticsEngine
             participation[spk] = (wSpeak * sec) + (wTurns * t) - (wInterrupt * intr);
         }
 
+        (Dictionary<string, int> emotionOverall, Dictionary<string, Dictionary<string, int>> emotionBySpeaker) = ComputeEmotionAggregates();
+
         return new MeetingSession
         {
             StartedAtUtc = _startedAtUtc,
@@ -188,13 +203,93 @@ public sealed class MeetingAnalyticsEngine
             VisualSegments = [.. _segments],
             SpeakingTimeSecondsBySpeaker = speaking,
             InterruptionsBySpeaker = interruptions,
+            InterruptionEvents = interruptionEvents,
             Utterances = [.. _utterances],
             AudioSpeakerSegments = [.. _audioSegments],
             AudioSpeakerToFace = audioToFace,
             TurnsBySpeaker = turns,
             ParticipationScoreBySpeaker = participation,
-            ConversationGraph = graph
+            ConversationGraph = graph,
+            EmotionSamples = [.. _emotionSamples],
+            EmotionCountsOverall = emotionOverall,
+            EmotionCountsBySpeaker = emotionBySpeaker
         };
+    }
+
+    private static List<InterruptionEvent> ComputeInterruptionEvents(IReadOnlyList<SpeakerSegment> segments, DateTime endedAtUtc)
+    {
+        // Corporate-style heuristic: a speaker "interrupts" when they start speaking while another speaker is still speaking.
+        // (Uses overlaps rather than gaps, tolerant to minor diarization jitter.)
+        const double minOverlapSeconds = 0.25;
+        TimeSpan tolerance = TimeSpan.FromMilliseconds(150);
+
+        List<(DateTime Start, DateTime End, string Key)> segs = new();
+        foreach (SpeakerSegment s in segments)
+        {
+            DateTime end = s.EndUtc ?? endedAtUtc;
+            if (end <= s.StartUtc)
+            {
+                continue;
+            }
+
+            segs.Add((s.StartUtc, end, s.SpeakerKey));
+        }
+
+        segs.Sort((a, b) => a.Start.CompareTo(b.Start));
+
+        List<InterruptionEvent> events = new();
+        for (int i = 0; i < segs.Count; i++)
+        {
+            (DateTime Start, DateTime End, string Key) cur = segs[i];
+
+            // Find the best overlapping "previous" segment from another speaker.
+            int bestIdx = -1;
+            double bestOverlap = 0;
+            for (int j = i - 1; j >= 0; j--)
+            {
+                (DateTime Start, DateTime End, string Key) prev = segs[j];
+                if (prev.End <= cur.Start + tolerance)
+                {
+                    break; // earlier segments will also end before cur starts
+                }
+
+                if (string.Equals(prev.Key, cur.Key, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                DateTime overlapEnd = prev.End < cur.End ? prev.End : cur.End;
+                double overlap = (overlapEnd - cur.Start).TotalSeconds;
+                if (overlap > bestOverlap)
+                {
+                    bestOverlap = overlap;
+                    bestIdx = j;
+                }
+            }
+
+            if (bestIdx >= 0 && bestOverlap >= minOverlapSeconds)
+            {
+                string interruptedKey = segs[bestIdx].Key;
+
+                // De-dup rapid re-triggers (e.g., diarization micro-splits).
+                InterruptionEvent? last = events.LastOrDefault(e =>
+                    string.Equals(e.InterrupterSpeakerKey, cur.Key, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(e.InterruptedSpeakerKey, interruptedKey, StringComparison.OrdinalIgnoreCase));
+
+                if (last == null || (cur.Start - last.WhenUtc) > TimeSpan.FromMilliseconds(800))
+                {
+                    events.Add(new InterruptionEvent
+                    {
+                        WhenUtc = cur.Start,
+                        InterrupterSpeakerKey = cur.Key,
+                        InterruptedSpeakerKey = interruptedKey,
+                        OverlapSeconds = Math.Round(bestOverlap, 3)
+                    });
+                }
+            }
+        }
+
+        return events;
     }
 
     /// <summary>
@@ -277,24 +372,16 @@ public sealed class MeetingAnalyticsEngine
     /// <returns>A collection of tuples containing speaker key, display name, and duration in seconds.</returns>
     public IReadOnlyList<(string SpeakerKey, string? DisplayName, double Seconds)> GetSpeakingTimeSoFar(DateTime nowUtc, int top = 3)
     {
+        List<SpeakerSegment> primary = GetPrimarySegmentsForNow(nowUtc, out Dictionary<string, string?> names);
         Dictionary<string, double> totals = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, string?> names = new(StringComparer.OrdinalIgnoreCase);
 
-        foreach (SpeakerSegment seg in _segments)
+        foreach (SpeakerSegment seg in primary)
         {
             DateTime end = seg.EndUtc ?? nowUtc;
             double dur = (end - seg.StartUtc).TotalSeconds;
-            if (dur <= 0)
-            {
-                continue;
-            }
-
+            if (dur <= 0) continue;
             _ = totals.TryGetValue(seg.SpeakerKey, out double cur);
             totals[seg.SpeakerKey] = cur + dur;
-            if (!names.ContainsKey(seg.SpeakerKey))
-            {
-                names[seg.SpeakerKey] = seg.DisplayName;
-            }
         }
 
         return [.. totals
@@ -305,44 +392,33 @@ public sealed class MeetingAnalyticsEngine
 
     public IReadOnlyList<(string SpeakerKey, string? DisplayName, double Score)> GetParticipationSoFar(DateTime nowUtc, int top = 3)
     {
+        List<SpeakerSegment> primary = GetPrimarySegmentsForNow(nowUtc, out Dictionary<string, string?> names);
+
         // Speaking seconds
         Dictionary<string, double> speaking = new(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, string?> names = new(StringComparer.OrdinalIgnoreCase);
-        foreach (SpeakerSegment seg in _segments)
+        foreach (SpeakerSegment seg in primary)
         {
             DateTime end = seg.EndUtc ?? nowUtc;
             double dur = (end - seg.StartUtc).TotalSeconds;
-            if (dur <= 0)
-            {
-                continue;
-            }
-
+            if (dur <= 0) continue;
             _ = speaking.TryGetValue(seg.SpeakerKey, out double cur);
             speaking[seg.SpeakerKey] = cur + dur;
-            _ = names.TryAdd(seg.SpeakerKey, seg.DisplayName);
         }
 
         // Turns
         Dictionary<string, int> turns = new(StringComparer.OrdinalIgnoreCase);
-        foreach (SpeakerSegment seg in _segments)
+        foreach (SpeakerSegment seg in primary)
         {
             _ = turns.TryGetValue(seg.SpeakerKey, out int t);
             turns[seg.SpeakerKey] = t + 1;
         }
 
-        // Interruptions (same heuristic as StopAndBuild, using nowUtc for open segment ends)
+        List<InterruptionEvent> ev = ComputeInterruptionEvents(primary, nowUtc);
         Dictionary<string, int> interruptions = new(StringComparer.OrdinalIgnoreCase);
-        for (int i = 1; i < _segments.Count; i++)
+        foreach (InterruptionEvent e in ev)
         {
-            SpeakerSegment prev = _segments[i - 1];
-            SpeakerSegment cur = _segments[i];
-            DateTime prevEnd = prev.EndUtc ?? nowUtc;
-            TimeSpan gap = cur.StartUtc - prevEnd;
-            if (gap < TimeSpan.FromMilliseconds(500))
-            {
-                _ = interruptions.TryGetValue(cur.SpeakerKey, out int c);
-                interruptions[cur.SpeakerKey] = c + 1;
-            }
+            _ = interruptions.TryGetValue(e.InterrupterSpeakerKey, out int c);
+            interruptions[e.InterrupterSpeakerKey] = c + 1;
         }
 
         const double wSpeak = 1.0;
@@ -361,6 +437,29 @@ public sealed class MeetingAnalyticsEngine
             .OrderByDescending(kvp => kvp.Value)
             .Take(Math.Clamp(top, 1, 10))
             .Select(kvp => (kvp.Key, names.TryGetValue(kvp.Key, out string? n) ? n : null, kvp.Value))];
+    }
+
+    private List<SpeakerSegment> GetPrimarySegmentsForNow(DateTime nowUtc, out Dictionary<string, string?> namesByKey)
+    {
+        namesByKey = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        if (_audioSegments.Count == 0)
+        {
+            foreach (SpeakerSegment s in _segments)
+            {
+                _ = namesByKey.TryAdd(s.SpeakerKey, s.DisplayName);
+            }
+            return [.. _segments];
+        }
+
+        Dictionary<int, SpeakerFaceMapping> map = BuildAudioSpeakerToFaceMapping(nowUtc);
+        List<SpeakerSegment> primary = BuildAudioMappedSegments(map);
+        foreach (SpeakerSegment s in primary)
+        {
+            _ = namesByKey.TryAdd(s.SpeakerKey, s.DisplayName);
+        }
+
+        return primary;
     }
 
     /// <summary>
@@ -546,6 +645,70 @@ public sealed class MeetingAnalyticsEngine
                 };
             }
         }
+    }
+
+    private void ResolveEmotionSamplesWithAudioMapping(Dictionary<int, SpeakerFaceMapping> audioToFace)
+    {
+        // If we have a mapping to named tracks, normalize emotion samples to match the final speaker keys where possible.
+        for (int i = 0; i < _emotionSamples.Count; i++)
+        {
+            EmotionSample s = _emotionSamples[i];
+            if (s.TrackId == null)
+            {
+                continue;
+            }
+
+            // If any audio speaker maps to this track, prefer the mapped display name for consistent reporting.
+            SpeakerFaceMapping? map = audioToFace.Values.FirstOrDefault(v => v.TrackId == s.TrackId);
+            if (map?.TrackId == null)
+            {
+                continue;
+            }
+
+            string? display = NormalizeDisplayName(map.DisplayName) ?? s.DisplayName;
+            string key = !string.IsNullOrWhiteSpace(display) ? $"Name:{display}" : $"Track:{map.TrackId.Value}";
+
+            if (!string.Equals(key, s.SpeakerKey, StringComparison.OrdinalIgnoreCase) || s.DisplayName != display)
+            {
+                _emotionSamples[i] = new EmotionSample
+                {
+                    WhenUtc = s.WhenUtc,
+                    SpeakerKey = key,
+                    DisplayName = display,
+                    TrackId = map.TrackId,
+                    Emotion = s.Emotion,
+                    Confidence = s.Confidence
+                };
+            }
+        }
+    }
+
+    private (Dictionary<string, int> Overall, Dictionary<string, Dictionary<string, int>> BySpeaker) ComputeEmotionAggregates()
+    {
+        Dictionary<string, int> overall = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, Dictionary<string, int>> bySpeaker = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (EmotionSample s in _emotionSamples)
+        {
+            if (string.IsNullOrWhiteSpace(s.Emotion))
+            {
+                continue;
+            }
+
+            _ = overall.TryGetValue(s.Emotion, out int o);
+            overall[s.Emotion] = o + 1;
+
+            if (!bySpeaker.TryGetValue(s.SpeakerKey, out Dictionary<string, int>? map))
+            {
+                map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                bySpeaker[s.SpeakerKey] = map;
+            }
+
+            _ = map.TryGetValue(s.Emotion, out int c);
+            map[s.Emotion] = c + 1;
+        }
+
+        return (overall, bySpeaker);
     }
 
     private List<SpeakerSegment> BuildAudioMappedSegments(Dictionary<int, SpeakerFaceMapping> audioToFace)

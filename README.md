@@ -1,14 +1,14 @@
 # Facial Recognition & Meeting Analytics
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![.NET](https://img.shields.io/badge/.NET-9.0-purple.svg)
+![.NET](https://img.shields.io/badge/.NET-8.0-purple.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7.svg)
 
 Um assistente inteligente em tempo real para análise de reuniões virtuais, focado em privacidade e processamento local.
 
 ## 📌 Visão Geral
 
-Este projeto é uma aplicação desktop (.NET 9 / WPF) projetada para observar e analisar reuniões de vídeo (como Microsoft Teams ou Zoom) através da captura de janela. O sistema detecta participantes, reconhece identidades cadastradas, analisa emoções e identifica quem está falando, exibindo tudo em um overlay transparente e não intrusivo.
+Este projeto é uma aplicação desktop (.NET 8 / WPF) projetada para observar e analisar reuniões de vídeo (como Microsoft Teams ou Zoom) através da captura de janela. O sistema detecta participantes, reconhece identidades cadastradas, analisa emoções e identifica quem está falando, exibindo tudo em um overlay transparente e não intrusivo.
 
 Diferente de soluções baseadas em nuvem, **todo o processamento ocorre localmente** no computador do usuário, garantindo máxima privacidade e baixa latência.
 
@@ -24,7 +24,7 @@ Diferente de soluções baseadas em nuvem, **todo o processamento ocorre localme
 
 ## 🛠️ Stack Tecnológica
 
-- **Linguagem/Framework**: C# / .NET 9 / WPF (MVVM)
+- **Linguagem/Framework**: C# / .NET 8 / WPF (MVVM)
 - **Visão Computacional**: OpenCV (OpenCvSharp4), FaceAiSharp (SCRFD)
 - **Machine Learning**: ONNX Runtime (CPU/GPU)
 - **Áudio**: NAudio (WASAPI Loopback)
@@ -63,7 +63,7 @@ O projeto possui uma documentação extensa dividida por áreas de interesse:
 
 ### Pré-requisitos
 - **Windows 10 1903 (Build 18362)** ou superior.
-- **.NET 9 SDK**.
+- **.NET 8 SDK**.
 - Placa de vídeo compatível com DirectX 11 (para captura acelerada).
 
 ### Instalação

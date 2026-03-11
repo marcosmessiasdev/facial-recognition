@@ -50,6 +50,7 @@ namespace E2ETests
         private IBrowser?    _browser;
         private IPage?       _page;
         private IBrowserContext? _context;
+        private string? _pageTitle;
 
         private class WindowItem { public IntPtr Handle {get;set;} public string Name {get;set;} = ""; }
         
@@ -87,6 +88,10 @@ namespace E2ETests
 
             var isPlaying = await _page.EvaluateAsync<bool>("() => { const v=document.querySelector('video'); return v && !v.paused; }");
             Assert.That(isPlaying, Is.True, "Local test video is not playing");
+
+            _pageTitle = await _page.TitleAsync();
+            TestContext.Out.WriteLine($"Browser page title: {_pageTitle}");
+            await _page.BringToFrontAsync();
         }
 
         [OneTimeTearDown]
@@ -110,7 +115,10 @@ namespace E2ETests
 
             // Find the Chrome window running the video
             var hwnds = GetHwndsFromListBox(listBox!);
+            var titleHint = _pageTitle ?? "Test Video";
             var browserHwnd = hwnds.FirstOrDefault(i =>
+                i.Name.Contains(titleHint, StringComparison.OrdinalIgnoreCase) ||
+                i.Name.Contains("faces.mp4", StringComparison.OrdinalIgnoreCase) ||
                 i.Name.Contains("YouTube", StringComparison.OrdinalIgnoreCase) || 
                 i.Name.Contains("Chrome", StringComparison.OrdinalIgnoreCase));
 
@@ -185,7 +193,10 @@ namespace E2ETests
 
             var listBox = MainWindow!.FindFirstDescendant(cf => cf.ByAutomationId("WindowListBox"))?.AsListBox();
             var hwnds = GetHwndsFromListBox(listBox!);
+            var titleHint = _pageTitle ?? "Test Video";
             var browserItem = listBox!.Items.FirstOrDefault(i => 
+                i.Name.Contains(titleHint, StringComparison.OrdinalIgnoreCase) ||
+                i.Name.Contains("faces.mp4", StringComparison.OrdinalIgnoreCase) ||
                 i.Name.Contains("YouTube", StringComparison.OrdinalIgnoreCase) || 
                 i.Name.Contains("Chrome", StringComparison.OrdinalIgnoreCase));
             

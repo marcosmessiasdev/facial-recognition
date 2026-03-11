@@ -26,7 +26,7 @@ The project uses a **Modular Monolith** approach with clear separation of concer
 7. **Display**: Results are rendered via a transparent overlay window.
 
 ## Technology Stack
-- **Runtime**: .NET 8 / .NET 9 (WPF for UI)
+- **Runtime**: .NET 8 (WPF for UI)
 - **Computer Vision**: OpenCV (OpenCvSharp4), FaceAiSharp (SCRFD)
 - **Machine Learning**: ONNX Runtime (Microsoft.ML.OnnxRuntime)
 - **Audio**: NAudio (WASAPI Loopback)

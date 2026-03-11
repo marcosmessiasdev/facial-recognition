@@ -61,7 +61,7 @@ Cada etapa será implementada como um módulo independente dentro da aplicação
 A solução utilizará exclusivamente tecnologias gratuitas e open source.
 
 ## Plataforma da Aplicação
-- .NET 9
+- .NET 8
 - WPF para interface desktop
 - Arquitetura baseada em MVVM
 

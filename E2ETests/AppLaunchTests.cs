@@ -23,6 +23,7 @@ namespace E2ETests;
 /// </summary>
 [TestFixture]
 [Apartment(ApartmentState.STA)]
+[Explicit("Interactive UI smoke tests (non-deterministic). Run manually when validating the desktop UI.")]
 public partial class AppLaunchTests : AppTestBase
 {
     // ──────────────────────────────────────────────────────────

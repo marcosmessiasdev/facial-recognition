@@ -28,6 +28,15 @@ public sealed class MeetingSession
 
     /// <summary>Best-effort mapping from audio speaker IDs to face tracks/identities.</summary>
     public required Dictionary<int, SpeakerFaceMapping> AudioSpeakerToFace { get; init; }
+
+    /// <summary>Count of speaking turns (segment starts) by speaker.</summary>
+    public required Dictionary<string, int> TurnsBySpeaker { get; init; }
+
+    /// <summary>Simple participation score (transparent heuristic) by speaker.</summary>
+    public required Dictionary<string, double> ParticipationScoreBySpeaker { get; init; }
+
+    /// <summary>Conversation graph edges (who follows who in turn-taking).</summary>
+    public required List<ConversationEdge> ConversationGraph { get; init; }
 }
 
 /// <summary>
@@ -73,4 +82,11 @@ public sealed class SpeakerFaceMapping
     public int? TrackId { get; init; }
     public string? DisplayName { get; init; }
     public float Score { get; init; }
+}
+
+public sealed class ConversationEdge
+{
+    public required string FromSpeakerKey { get; init; }
+    public required string ToSpeakerKey { get; init; }
+    public int Count { get; init; }
 }

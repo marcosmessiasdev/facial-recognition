@@ -75,12 +75,30 @@ O projeto possui uma documentação extensa dividida por áreas de interesse:
    ```
 2. Compile o projeto:
    ```bash
-   dotnet build
+   dotnet build App/App.csproj
+   ```
+3. (Opcional) Valide os modelos offline (sem rede):
+   ```bash
+   pwsh scripts/fetch_models.ps1 -ValidateOnly
    ```
 4. Execute a aplicação:
    ```bash
    dotnet run --project App
    ```
+
+### Demo offline (sem YouTube)
+- No app, use `🧪 Abrir Demo Offline` e depois selecione a janela do navegador na lista e clique em `▶ Iniciar Análise`.
+
+### E2E offline (determinístico)
+1. Instale o Chromium do Playwright (primeira vez):
+   ```bash
+   pwsh E2ETests/bin/Debug/net8.0-windows10.0.19041.0/playwright.ps1 install chromium
+   ```
+2. Rode:
+   ```bash
+   dotnet test E2ETests/E2ETests.csproj --filter "FullyQualifiedName~Test_PipelineStabilityOver30Seconds"
+   ```
+3. (Opcional) Se quiser GIFs reais para “boca mexendo”, defina `FACIAL_E2E_GIF_DIR` apontando para uma pasta local com `.gif`.
 
 ## 🔒 Privacidade e Ética
 

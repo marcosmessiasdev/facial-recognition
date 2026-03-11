@@ -47,6 +47,9 @@
     <None Include="models\\**\\*.*" Exclude="models\\**\\.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="demo\\**\\*.*" Exclude="demo\\**\\.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

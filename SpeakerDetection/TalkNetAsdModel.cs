@@ -285,8 +285,8 @@ public sealed class TalkNetAsdModel : IDisposable
             melPoints[i] = melMin + ((melMax - melMin) * i / (nMels + 1));
         }
 
-        double[] hzPoints = melPoints.Select(MelToHz).ToArray();
-        int[] bin = hzPoints.Select(hz => (int)Math.Floor((nFft + 1) * hz / sr)).ToArray();
+        double[] hzPoints = [.. melPoints.Select(MelToHz)];
+        int[] bin = [.. hzPoints.Select(hz => (int)Math.Floor((nFft + 1) * hz / sr))];
 
         float[][] bank = new float[nMels][];
         for (int m = 0; m < nMels; m++)

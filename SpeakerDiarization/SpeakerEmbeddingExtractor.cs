@@ -29,8 +29,9 @@ namespace SpeakerDiarization;
 public sealed class SpeakerEmbeddingExtractor : IDisposable
 {
     private readonly InferenceSession _session;
-    private readonly string _inputName;
-    private readonly int[] _inputDims;
+    private readonly string _audioInputName;
+    private readonly int[] _audioInputDims;
+    private readonly string? _lengthInputName;
     private readonly string _outputName;
     private readonly int _sampleRateHz;
 
@@ -44,9 +45,8 @@ public sealed class SpeakerEmbeddingExtractor : IDisposable
         _sampleRateHz = sampleRateHz;
         _session = new InferenceSession(modelPath);
 
-        // Assume single input.
-        _inputName = _session.InputMetadata.Keys.First();
-        _inputDims = _session.InputMetadata[_inputName].Dimensions;
+        (_audioInputName, _lengthInputName) = SelectInputs(_session.InputMetadata);
+        _audioInputDims = _session.InputMetadata[_audioInputName].Dimensions;
 
         // Assume single output.
         _outputName = _session.OutputMetadata.Keys.First();
@@ -76,7 +76,7 @@ public sealed class SpeakerEmbeddingExtractor : IDisposable
         }
 
         // Decide based on input rank.
-        if (_inputDims.Length == 2)
+        if (_audioInputDims.Length == 2)
         {
             // Waveform: [1, N]
             DenseTensor<float> tensor = new([1, pcm16kMono.Length]);
@@ -85,10 +85,10 @@ public sealed class SpeakerEmbeddingExtractor : IDisposable
                 tensor[0, i] = pcm16kMono[i];
             }
 
-            List<NamedOnnxValue> inputs = new(1)
-            {
-                NamedOnnxValue.CreateFromTensor(_inputName, tensor)
-            };
+            List<NamedOnnxValue> inputs = new(2);
+            inputs.Add(NamedOnnxValue.CreateFromTensor(_audioInputName, tensor));
+            AddLengthIfNeeded(inputs, length: pcm16kMono.Length);
+
             using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
             return To1DFloat(results.First(r => r.Name == _outputName).AsTensor<float>());
         }
@@ -112,14 +112,47 @@ public sealed class SpeakerEmbeddingExtractor : IDisposable
             }
         }
 
-        List<NamedOnnxValue> in2 = new(1)
-        {
-            NamedOnnxValue.CreateFromTensor(_inputName, featTensor)
-        };
+        List<NamedOnnxValue> in2 = new(2);
+        in2.Add(NamedOnnxValue.CreateFromTensor(_audioInputName, featTensor));
+        AddLengthIfNeeded(in2, length: T);
+
         using (IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(in2))
         {
             return To1DFloat(results.First(r => r.Name == _outputName).AsTensor<float>());
         }
+    }
+
+    private void AddLengthIfNeeded(List<NamedOnnxValue> inputs, int length)
+    {
+        if (string.IsNullOrWhiteSpace(_lengthInputName))
+        {
+            return;
+        }
+
+        int[] dims = _session.InputMetadata[_lengthInputName].Dimensions;
+        DenseTensor<long> len = dims.Length == 0 ? new DenseTensor<long>([]) : new DenseTensor<long>([1]);
+        len.Buffer.Span[0] = length;
+        inputs.Add(NamedOnnxValue.CreateFromTensor(_lengthInputName, len));
+    }
+
+    private static (string audio, string? length) SelectInputs(IReadOnlyDictionary<string, NodeMetadata> inputs)
+    {
+        string? audio = null;
+        string? length = null;
+
+        foreach (KeyValuePair<string, NodeMetadata> kvp in inputs)
+        {
+            if (kvp.Value.ElementType == typeof(float))
+            {
+                audio ??= kvp.Key;
+            }
+            else if (kvp.Value.ElementType == typeof(long))
+            {
+                length ??= kvp.Key;
+            }
+        }
+
+        return audio == null ? throw new InvalidOperationException("Speaker embedding model input not recognized (expected a float audio/features tensor).") : (audio, length);
     }
 
     private static float[] To1DFloat(Tensor<float> t)
@@ -231,8 +264,8 @@ public sealed class SpeakerEmbeddingExtractor : IDisposable
             melPoints[i] = melMin + ((melMax - melMin) * i / (nMels + 1));
         }
 
-        double[] hzPoints = melPoints.Select(MelToHz).ToArray();
-        int[] bin = hzPoints.Select(hz => (int)Math.Floor((nFft + 1) * hz / sr)).ToArray();
+        double[] hzPoints = [.. melPoints.Select(MelToHz)];
+        int[] bin = [.. hzPoints.Select(hz => (int)Math.Floor((nFft + 1) * hz / sr))];
 
         float[][] bank = new float[nMels][];
         for (int m = 0; m < nMels; m++)

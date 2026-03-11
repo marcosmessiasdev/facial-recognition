@@ -193,7 +193,7 @@ public sealed class FaceMeshLandmarker : IDisposable
             name.Contains("y2", StringComparison.OrdinalIgnoreCase) ? InputSize :
             0f;
 
-        int[] shape = dims.Length == 0 ? [1] : dims.Select(d => d > 0 ? d : 1).ToArray();
+        int[] shape = dims.Length == 0 ? [1] : [.. dims.Select(d => d > 0 ? d : 1)];
 
         if (elementType == typeof(float))
         {
@@ -263,7 +263,7 @@ public sealed class FaceMeshLandmarker : IDisposable
         }
 
         // Fallback: attempt to materialize as float via ToArray (last resort).
-        float[] arr = output.AsEnumerable<float>().ToArray();
+        float[] arr = [.. output.AsEnumerable<float>()];
         int stride = 3;
         int idxU = MouthUpperInner * stride;
         int idxL = MouthLowerInner * stride;

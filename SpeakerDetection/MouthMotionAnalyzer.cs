@@ -162,7 +162,7 @@ public sealed class MouthMotionAnalyzer(int bufferMs = 1500, int workWidth = 64,
     public void PruneToActiveTracks(IEnumerable<int> activeTrackIds)
     {
         HashSet<int> keep = [.. activeTrackIds];
-        int[] toRemove = _states.Keys.Where(id => !keep.Contains(id)).ToArray();
+        int[] toRemove = [.. _states.Keys.Where(id => !keep.Contains(id))];
         foreach (int id in toRemove)
         {
             if (_states.TryGetValue(id, out TrackState? st))

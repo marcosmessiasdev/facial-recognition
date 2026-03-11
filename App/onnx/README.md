@@ -4,6 +4,11 @@ This folder contains ONNX models that are vendored into the repo so the app can 
 
 ## Included models
 
+- `scrfd_2.5g_kps.onnx`
+  - Task: face detection (with keypoints)
+  - Source: InsightFace SCRFD `scrfd_2.5g_kps` (ONNX)
+  - SHA256: `041f73f47371333d1d17a6fee6c8ab4e6aecabefe398ff32cca4e2d5eaee0af9`
+
 - `arcface.onnx`
   - Task: face embedding (recognition)
   - Source: InsightFace model `w600k_r50.onnx` (as redistributed by `yakhyo/facial-analysis`)

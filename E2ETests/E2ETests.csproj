@@ -26,7 +26,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\AudioProcessing\AudioProcessing.csproj" />
+    <ProjectReference Include="..\SpeechProcessing\SpeechProcessing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="video\\**\\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="audio\\**\\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

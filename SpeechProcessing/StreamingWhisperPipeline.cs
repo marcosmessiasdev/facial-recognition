@@ -29,11 +29,15 @@ public sealed class StreamingWhisperPipeline : IDisposable
     private readonly WhisperTranscriber _transcriber;
     private readonly string _language;
     private readonly SemaphoreSlim _oneAtATime = new(1, 1);
+    private readonly List<Task> _pending = new();
+    private readonly object _pendingSync = new();
 
     /// <summary>
     /// Event fired when a chunk of audio has finished converting to a text sequence.
     /// </summary>
     public event EventHandler<TranscriptSegment>? TranscriptReady;
+    public event EventHandler<Exception>? TranscriptionFailed;
+    public event EventHandler<(TimeSpan Start, TimeSpan End, int SampleCount)>? SpeechSegmentReady;
 
     /// <summary>
     /// Instantiates the streaming Whisper pipeline.
@@ -42,11 +46,11 @@ public sealed class StreamingWhisperPipeline : IDisposable
     /// <param name="language">Language code or "auto".</param>
     /// <param name="hangoverMs">Ms of silence allowed before finishing a sentence.</param>
     /// <param name="maxSegmentSeconds">Absolute maximum duration of an audio chunk string before splitting.</param>
-    public StreamingWhisperPipeline(string ggmlModelPath, string language, int hangoverMs, int maxSegmentSeconds)
+    public StreamingWhisperPipeline(string ggmlModelPath, string language, int hangoverMs, int maxSegmentSeconds, int minSegmentMs)
     {
         _language = string.IsNullOrWhiteSpace(language) ? "auto" : language.Trim();
         _transcriber = new WhisperTranscriber(ggmlModelPath);
-        _segmenter = new VadSegmenter(sampleRateHz: 16000, hangoverMs: hangoverMs, maxSegmentSeconds: maxSegmentSeconds);
+        _segmenter = new VadSegmenter(sampleRateHz: 16000, hangoverMs: hangoverMs, maxSegmentSeconds: maxSegmentSeconds, minSegmentMs: minSegmentMs);
         _segmenter.SegmentReady += OnSegmentReady;
         _segmenter.Start();
     }
@@ -64,27 +68,64 @@ public sealed class StreamingWhisperPipeline : IDisposable
 
     private void OnSegmentReady(object? sender, (TimeSpan Start, TimeSpan End, float[] Samples) seg)
     {
-        _ = Task.Run(async () =>
+        SpeechSegmentReady?.Invoke(this, (seg.Start, seg.End, seg.Samples.Length));
+
+        Task task = Task.Run(async () =>
         {
             await _oneAtATime.WaitAsync();
             try
             {
-                using CancellationTokenSource cts = new(TimeSpan.FromSeconds(30));
+                // Whisper inference can be slow on some machines; prefer avoiding noisy cancellations.
+                using CancellationTokenSource cts = new(TimeSpan.FromMinutes(3));
                 string text = await _transcriber.TranscribeAsync(seg.Samples, _language, cts.Token);
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     TranscriptReady?.Invoke(this, new TranscriptSegment(seg.Start, seg.End, text));
                 }
             }
-            catch
+            catch (OperationCanceledException)
             {
-                // best-effort transcription; ignore failures
+                // Best-effort pipeline: dropping a segment is acceptable, especially during shutdown/drain.
+            }
+            catch (Exception ex)
+            {
+                TranscriptionFailed?.Invoke(this, ex);
             }
             finally
             {
                 _ = _oneAtATime.Release();
             }
         });
+
+        lock (_pendingSync)
+        {
+            _pending.Add(task);
+        }
+    }
+
+    public void StopAndDrain(TimeSpan timeout)
+    {
+        _segmenter.Stop();
+
+        Task[] tasks;
+        lock (_pendingSync)
+        {
+            tasks = [.. _pending.Where(t => !t.IsCompleted)];
+        }
+
+        if (tasks.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Task.WaitAll(tasks, timeout);
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     /// <summary>
@@ -98,4 +139,3 @@ public sealed class StreamingWhisperPipeline : IDisposable
         _oneAtATime.Dispose();
     }
 }
-

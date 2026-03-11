@@ -5,12 +5,17 @@ namespace SpeechProcessing;
 /// <summary>
 /// Collects 16kHz mono PCM frames into speech segments using a boolean VAD signal.
 /// </summary>
-public sealed class VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350, int maxSegmentSeconds = 15) : IDisposable
+public sealed class VadSegmenter(
+    int sampleRateHz = 16000,
+    int hangoverMs = 350,
+    int maxSegmentSeconds = 15,
+    int minSegmentMs = 800) : IDisposable
 {
     private readonly object _sync = new();
     private readonly int _sampleRateHz = sampleRateHz;
     private readonly TimeSpan _hangover = TimeSpan.FromMilliseconds(Math.Clamp(hangoverMs, 0, 2000));
     private readonly TimeSpan _maxSegment = TimeSpan.FromSeconds(Math.Clamp(maxSegmentSeconds, 2, 60));
+    private readonly TimeSpan _minSegment = TimeSpan.FromMilliseconds(Math.Clamp(minSegmentMs, 0, 10_000));
 
     private readonly ConcurrentQueue<(float[] Samples, TimeSpan Time)> _queue = new();
     private CancellationTokenSource? _cts;
@@ -19,6 +24,7 @@ public sealed class VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350,
     private bool _inSpeech;
     private TimeSpan _segmentStart;
     private TimeSpan _lastSpeechTime;
+    private TimeSpan _lastTimestamp;
     private List<float>? _segment;
 
     public event EventHandler<(TimeSpan Start, TimeSpan End, float[] Samples)>? SegmentReady;
@@ -45,6 +51,7 @@ public sealed class VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350,
         }
 
         try { _ = (_pumpTask?.Wait(TimeSpan.FromSeconds(1))); } catch { /* ignore */ }
+        FlushIfNeeded();
     }
 
     public void Push(float[] samples, TimeSpan timestamp, bool speechActive)
@@ -53,6 +60,7 @@ public sealed class VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350,
 
         // Keep this lock-free for the capture thread.
         _queue.Enqueue((samples, timestamp));
+        _lastTimestamp = timestamp;
 
         // Update VAD state (cheap atomic-like update).
         if (speechActive)
@@ -92,16 +100,39 @@ public sealed class VadSegmenter(int sampleRateHz = 16000, int hangoverMs = 350,
                     _inSpeech = false;
                     _segment = null;
 
-                    float[] pcm = seg.ToArray();
-                    SegmentReady?.Invoke(this, (_segmentStart, time, pcm));
+                    if (_minSegment == TimeSpan.Zero || segDur >= _minSegment)
+                    {
+                        float[] pcm = [.. seg];
+                        SegmentReady?.Invoke(this, (_segmentStart, time, pcm));
+                    }
                 }
             }
+        }
+    }
+
+    private void FlushIfNeeded()
+    {
+        List<float>? seg = _segment;
+        if (seg == null)
+        {
+            return;
+        }
+
+        TimeSpan end = _lastTimestamp;
+        TimeSpan dur = end - _segmentStart;
+        _segment = null;
+        _inSpeech = false;
+
+        if (_minSegment == TimeSpan.Zero || dur >= _minSegment)
+        {
+            SegmentReady?.Invoke(this, (_segmentStart, end, seg.ToArray()));
         }
     }
 
     public void Dispose()
     {
         Stop();
+        FlushIfNeeded();
         _cts?.Dispose();
         _cts = null;
     }

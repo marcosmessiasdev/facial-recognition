@@ -43,6 +43,8 @@ public sealed class SileroVad : IDisposable
     private DenseTensor<float>? _h;
     private DenseTensor<float>? _c;
 
+    public string DebugInfo { get; }
+
     /// <summary>
     /// Initializes a new instance of the SileroVad class with the specified model.
     /// </summary>
@@ -54,6 +56,16 @@ public sealed class SileroVad : IDisposable
 
         (_audioInputName, _srInputName, _hInputName, _cInputName) = SelectInputs(_session.InputMetadata);
         (_probOutputName, _hOutputName, _cOutputName) = SelectOutputs(_session.OutputMetadata);
+
+        DebugInfo = BuildDebugInfo(
+            _session,
+            _audioInputName,
+            _srInputName,
+            _hInputName,
+            _cInputName,
+            _probOutputName,
+            _hOutputName,
+            _cOutputName);
 
         if (_hInputName != null)
         {
@@ -93,8 +105,9 @@ public sealed class SileroVad : IDisposable
 
         if (_srInputName != null)
         {
-            DenseTensor<long> sr = new([1]);
-            sr[0] = sampleRateHz;
+            // Some models define sample-rate as a scalar (rank-0) tensor.
+            DenseTensor<long> sr = new([]);
+            sr.Buffer.Span[0] = sampleRateHz;
             inputs.Add(NamedOnnxValue.CreateFromTensor(_srInputName, sr));
         }
 
@@ -110,7 +123,14 @@ public sealed class SileroVad : IDisposable
 
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
 
-        float prob = results.First(r => r.Name == _probOutputName).AsEnumerable<float>().FirstOrDefault();
+        // Some exported variants return a sequence-like probability output (e.g. [N,1]).
+        // For streaming VAD we want the most recent probability in the chunk.
+        float prob = 0f;
+        Tensor<float> probTensor = results.First(r => r.Name == _probOutputName).AsTensor<float>();
+        foreach (float v in probTensor)
+        {
+            prob = v;
+        }
 
         if (_hOutputName != null && _h != null)
         {
@@ -206,7 +226,8 @@ public sealed class SileroVad : IDisposable
             NodeMetadata meta = kvp.Value;
             int[] dims = meta.Dimensions;
 
-            if (meta.ElementType == typeof(float) && dims.Length == 2 && (dims[0] == 1 || dims[0] <= 0))
+            // Silero VAD probability output is typically a scalar-ish float tensor (e.g. [1] or [1,1]).
+            if (meta.ElementType == typeof(float) && dims.Length <= 2)
             {
                 prob ??= name;
             }
@@ -229,7 +250,7 @@ public sealed class SileroVad : IDisposable
 
     private static DenseTensor<float> CreateZeroState(int[] dims)
     {
-        int[] normalized = dims.Select(d => d <= 0 ? 1 : d).ToArray();
+        int[] normalized = [.. dims.Select(d => d <= 0 ? 1 : d)];
         return new DenseTensor<float>(normalized);
     }
 
@@ -245,5 +266,31 @@ public sealed class SileroVad : IDisposable
 
         return clone;
     }
-}
 
+    private static string BuildDebugInfo(
+        InferenceSession session,
+        string audioIn,
+        string? srIn,
+        string? hIn,
+        string? cIn,
+        string probOut,
+        string? hOut,
+        string? cOut)
+    {
+        static string Dims(int[] d)
+        {
+            return d.Length == 0 ? "[]" : $"[{string.Join(",", d)}]";
+        }
+
+        string audioDims = Dims(session.InputMetadata[audioIn].Dimensions);
+        string srDims = srIn != null ? Dims(session.InputMetadata[srIn].Dimensions) : "n/a";
+        string hDims = hIn != null ? Dims(session.InputMetadata[hIn].Dimensions) : "n/a";
+        string cDims = cIn != null ? Dims(session.InputMetadata[cIn].Dimensions) : "n/a";
+
+        string pDims = Dims(session.OutputMetadata[probOut].Dimensions);
+        string hODims = hOut != null ? Dims(session.OutputMetadata[hOut].Dimensions) : "n/a";
+        string cODims = cOut != null ? Dims(session.OutputMetadata[cOut].Dimensions) : "n/a";
+
+        return $"inputs: audio='{audioIn}'{audioDims} sr='{srIn ?? "n/a"}'{srDims} h='{hIn ?? "n/a"}'{hDims} c='{cIn ?? "n/a"}'{cDims} | outputs: prob='{probOut}'{pDims} h='{hOut ?? "n/a"}'{hODims} c='{cOut ?? "n/a"}'{cODims}";
+    }
+}

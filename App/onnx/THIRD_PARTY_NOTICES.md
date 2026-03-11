@@ -16,6 +16,10 @@ The face embedding model file `arcface.onnx` is based on the InsightFace model `
 
 The combined attributes model file `genderage.onnx` was downloaded from the same model mirror and upstream pack.
 
+The face detector model file `scrfd_2.5g_kps.onnx` is from the InsightFace SCRFD family:
+
+- https://github.com/deepinsight/insightface (model family; license varies by artifact)
+
 The VAD model file `silero_vad.onnx` was downloaded from the official Silero VAD repository:
 
 - https://github.com/snakers4/silero-vad

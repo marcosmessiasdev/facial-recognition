@@ -111,12 +111,12 @@ public class EmotionClassifier : IDisposable
         };
 
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
-        float[] scores = results.First(r => r.Name == _outputName).AsEnumerable<float>().ToArray();
+        float[] scores = [.. results.First(r => r.Name == _outputName).AsEnumerable<float>()];
 
         // Softmax to get probabilities  
         float maxScore = scores.Max();
         float sumExp = scores.Sum(s => MathF.Exp(s - maxScore));
-        float[] probs = scores.Select(s => MathF.Exp(s - maxScore) / sumExp).ToArray();
+        float[] probs = [.. scores.Select(s => MathF.Exp(s - maxScore) / sumExp)];
 
         int bestIdx = Array.IndexOf(probs, probs.Max());
         Emotion label = bestIdx < Labels.Length ? Labels[bestIdx] : Emotion.Neutral;

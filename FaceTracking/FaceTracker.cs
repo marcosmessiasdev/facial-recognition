@@ -214,15 +214,15 @@ public class Track
     /// </summary>
     public bool IsSpeaking { get; set; }
 
-        /// <summary>
-        /// Gets or sets the per-face speaking score (0..1) for the current moment.
-        /// </summary>
-        public float SpeakingScore { get; set; }
+    /// <summary>
+    /// Gets or sets the per-face speaking score (0..1) for the current moment.
+    /// </summary>
+    public float SpeakingScore { get; set; }
 
-        /// <summary>
-        /// Gets or sets the per-face speaking probability predicted by TalkNet ASD (0..1).
-        /// </summary>
-        public float TalkNetSpeakingProb { get; set; }
+    /// <summary>
+    /// Gets or sets the per-face speaking probability predicted by TalkNet ASD (0..1).
+    /// </summary>
+    public float TalkNetSpeakingProb { get; set; }
 
     /// <summary>
     /// Gets or sets the number of frames elapsed since the last recognition attempt.

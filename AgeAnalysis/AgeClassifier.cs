@@ -142,11 +142,11 @@ public sealed class AgeClassifier : IDisposable
         };
 
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
-        float[] scores = results.First(r => r.Name == _outputName).AsEnumerable<float>().ToArray();
+        float[] scores = [.. results.First(r => r.Name == _outputName).AsEnumerable<float>()];
 
         float maxScore = scores.Max();
         float sumExp = scores.Sum(s => MathF.Exp(s - maxScore));
-        float[] probs = scores.Select(s => MathF.Exp(s - maxScore) / sumExp).ToArray();
+        float[] probs = [.. scores.Select(s => MathF.Exp(s - maxScore) / sumExp)];
 
         int bestIdx = Array.IndexOf(probs, probs.Max());
         AgeBucket bucket = bestIdx < Labels.Length ? Labels[bestIdx] : AgeBucket.Age25To32;

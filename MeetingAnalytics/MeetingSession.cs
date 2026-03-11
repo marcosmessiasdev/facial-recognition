@@ -14,6 +14,11 @@ public sealed class MeetingSession
     /// <summary>The chronological list of speaking segments detected during the session.</summary>
     public required List<SpeakerSegment> Segments { get; init; }
 
+    /// <summary>
+    /// Visual-only speaking segments derived from the active face track (useful for debugging A/V association).
+    /// </summary>
+    public required List<SpeakerSegment> VisualSegments { get; init; }
+
     /// <summary>Aggregated total speaking time (in seconds) mapped by speaker key.</summary>
     public required Dictionary<string, double> SpeakingTimeSecondsBySpeaker { get; init; }
 
@@ -55,6 +60,12 @@ public sealed class SpeakerSegment
 
     /// <summary>The human-readable display name of the speaker, if known.</summary>
     public string? DisplayName { get; set; }
+
+    /// <summary>The visual track ID if this segment was derived from a face track.</summary>
+    public int? TrackId { get; set; }
+
+    /// <summary>The audio speaker/cluster ID if this segment was derived from diarization.</summary>
+    public int? AudioSpeakerId { get; set; }
 }
 
 /// <summary>
@@ -67,6 +78,12 @@ public sealed class Utterance
     public required string SpeakerKey { get; init; }
     public string? DisplayName { get; set; }
     public required string Text { get; init; }
+
+    /// <summary>The resolved visual track ID for this utterance, when available.</summary>
+    public int? TrackId { get; set; }
+
+    /// <summary>The resolved audio speaker/cluster ID for this utterance, when available.</summary>
+    public int? AudioSpeakerId { get; set; }
 }
 
 public sealed class AudioSpeakerSegment

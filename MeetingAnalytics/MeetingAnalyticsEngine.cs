@@ -75,7 +75,9 @@ public sealed class MeetingAnalyticsEngine
             StartUtc = nowUtc,
             EndUtc = null,
             SpeakerKey = key,
-            DisplayName = display
+            DisplayName = display,
+            TrackId = _activeTrackId.Value,
+            AudioSpeakerId = null
         });
     }
 
@@ -93,8 +95,15 @@ public sealed class MeetingAnalyticsEngine
             last.EndUtc = endedAtUtc;
         }
 
+        Dictionary<int, SpeakerFaceMapping> audioToFace = BuildAudioSpeakerToFaceMapping(endedAtUtc);
+        List<SpeakerSegment> primarySegments = _audioSegments.Count > 0
+            ? BuildAudioMappedSegments(audioToFace)
+            : [.. _segments];
+
+        ResolveUtterancesWithAudioMapping(audioToFace);
+
         Dictionary<string, double> speaking = new(StringComparer.OrdinalIgnoreCase);
-        foreach (SpeakerSegment seg in _segments)
+        foreach (SpeakerSegment seg in primarySegments)
         {
             if (seg.EndUtc == null)
             {
@@ -113,10 +122,10 @@ public sealed class MeetingAnalyticsEngine
 
         // Interruptions (simple heuristic): if a speaker starts within 0.5s of previous segment end
         Dictionary<string, int> interruptions = new(StringComparer.OrdinalIgnoreCase);
-        for (int i = 1; i < _segments.Count; i++)
+        for (int i = 1; i < primarySegments.Count; i++)
         {
-            SpeakerSegment prev = _segments[i - 1];
-            SpeakerSegment cur = _segments[i];
+            SpeakerSegment prev = primarySegments[i - 1];
+            SpeakerSegment cur = primarySegments[i];
             if (prev.EndUtc == null)
             {
                 continue;
@@ -132,7 +141,7 @@ public sealed class MeetingAnalyticsEngine
 
         // Turn-taking (count segments per speaker)
         Dictionary<string, int> turns = new(StringComparer.OrdinalIgnoreCase);
-        foreach (SpeakerSegment seg in _segments)
+        foreach (SpeakerSegment seg in primarySegments)
         {
             _ = turns.TryGetValue(seg.SpeakerKey, out int t);
             turns[seg.SpeakerKey] = t + 1;
@@ -140,10 +149,10 @@ public sealed class MeetingAnalyticsEngine
 
         // Conversation graph (who follows who)
         Dictionary<(string From, string To), int> edgeCounts = new();
-        for (int i = 1; i < _segments.Count; i++)
+        for (int i = 1; i < primarySegments.Count; i++)
         {
-            SpeakerSegment prev = _segments[i - 1];
-            SpeakerSegment cur = _segments[i];
+            SpeakerSegment prev = primarySegments[i - 1];
+            SpeakerSegment cur = primarySegments[i];
             if (string.Equals(prev.SpeakerKey, cur.SpeakerKey, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -175,12 +184,13 @@ public sealed class MeetingAnalyticsEngine
         {
             StartedAtUtc = _startedAtUtc,
             EndedAtUtc = endedAtUtc,
-            Segments = [.. _segments],
+            Segments = primarySegments,
+            VisualSegments = [.. _segments],
             SpeakingTimeSecondsBySpeaker = speaking,
             InterruptionsBySpeaker = interruptions,
             Utterances = [.. _utterances],
             AudioSpeakerSegments = [.. _audioSegments],
-            AudioSpeakerToFace = BuildAudioSpeakerToFaceMapping(),
+            AudioSpeakerToFace = audioToFace,
             TurnsBySpeaker = turns,
             ParticipationScoreBySpeaker = participation,
             ConversationGraph = graph
@@ -205,6 +215,22 @@ public sealed class MeetingAnalyticsEngine
             return;
         }
 
+        int? audioSpeakerId = FindBestOverlappingAudioSpeakerId(startUtc, endUtc);
+        if (audioSpeakerId.HasValue)
+        {
+            _utterances.Add(new Utterance
+            {
+                StartUtc = startUtc,
+                EndUtc = endUtc,
+                SpeakerKey = $"Audio:{audioSpeakerId.Value}",
+                DisplayName = null,
+                Text = text.Trim(),
+                TrackId = null,
+                AudioSpeakerId = audioSpeakerId.Value
+            });
+            return;
+        }
+
         SpeakerSegment? best = FindBestOverlappingSpeaker(startUtc, endUtc);
         _utterances.Add(new Utterance
         {
@@ -212,8 +238,35 @@ public sealed class MeetingAnalyticsEngine
             EndUtc = endUtc,
             SpeakerKey = best?.SpeakerKey ?? "Unknown",
             DisplayName = best?.DisplayName,
-            Text = text.Trim()
+            Text = text.Trim(),
+            TrackId = best?.TrackId,
+            AudioSpeakerId = best?.AudioSpeakerId
         });
+    }
+
+    private int? FindBestOverlappingAudioSpeakerId(DateTime startUtc, DateTime endUtc)
+    {
+        int? bestId = null;
+        double bestOverlap = 0;
+
+        foreach (AudioSpeakerSegment seg in _audioSegments)
+        {
+            if (seg.EndUtc <= startUtc || seg.StartUtc >= endUtc)
+            {
+                continue;
+            }
+
+            DateTime overlapStart = seg.StartUtc > startUtc ? seg.StartUtc : startUtc;
+            DateTime overlapEnd = seg.EndUtc < endUtc ? seg.EndUtc : endUtc;
+            double overlap = (overlapEnd - overlapStart).TotalSeconds;
+            if (overlap > bestOverlap)
+            {
+                bestOverlap = overlap;
+                bestId = seg.SpeakerId;
+            }
+        }
+
+        return bestId;
     }
 
     /// <summary>
@@ -383,13 +436,53 @@ public sealed class MeetingAnalyticsEngine
     }
 
     /// <summary>
-    /// Estimates which visual track corresponds to which audio cluster ID based on recorded co-occurrence history.
+    /// Estimates which visual track corresponds to which audio cluster ID.
     /// </summary>
     /// <returns>A mapping from Audio Speaker ID to Face Track metadata.</returns>
-    private Dictionary<int, SpeakerFaceMapping> BuildAudioSpeakerToFaceMapping()
+    private Dictionary<int, SpeakerFaceMapping> BuildAudioSpeakerToFaceMapping(DateTime endedAtUtc)
     {
-        // Greedy assignment: for each speakerId pick the trackId with max cooccurrence.
-        Dictionary<int, List<KeyValuePair<(int SpeakerId, int TrackId), int>>> bySpeaker = _cooccurrence
+        // Prefer overlap between diarization segments and visual speaker segments; fall back to observed co-occurrence.
+        Dictionary<(int SpeakerId, int TrackId), double> weights = new();
+
+        foreach (AudioSpeakerSegment a in _audioSegments)
+        {
+            foreach (SpeakerSegment v in _segments)
+            {
+                if (!v.TrackId.HasValue)
+                {
+                    continue;
+                }
+
+                DateTime vEnd = v.EndUtc ?? endedAtUtc;
+                if (vEnd <= a.StartUtc || v.StartUtc >= a.EndUtc)
+                {
+                    continue;
+                }
+
+                DateTime overlapStart = v.StartUtc > a.StartUtc ? v.StartUtc : a.StartUtc;
+                DateTime overlapEnd = vEnd < a.EndUtc ? vEnd : a.EndUtc;
+                double sec = (overlapEnd - overlapStart).TotalSeconds;
+                if (sec <= 0)
+                {
+                    continue;
+                }
+
+                (int SpeakerId, int TrackId) k = (a.SpeakerId, v.TrackId.Value);
+                _ = weights.TryGetValue(k, out double cur);
+                weights[k] = cur + sec;
+            }
+        }
+
+        // Fallback: co-occurrence counts (small weight) for cases where overlap isn't available.
+        foreach (KeyValuePair<(int SpeakerId, int TrackId), int> kvp in _cooccurrence)
+        {
+            if (!weights.ContainsKey(kvp.Key))
+            {
+                weights[kvp.Key] = kvp.Value * 0.05;
+            }
+        }
+
+        Dictionary<int, List<KeyValuePair<(int SpeakerId, int TrackId), double>>> bySpeaker = weights
             .GroupBy(kvp => kvp.Key.SpeakerId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Value).ToList());
 
@@ -398,16 +491,17 @@ public sealed class MeetingAnalyticsEngine
 
         foreach (int speakerId in bySpeaker.Keys.OrderBy(k => k))
         {
-            List<KeyValuePair<(int SpeakerId, int TrackId), int>> candidates = bySpeaker[speakerId];
-            KeyValuePair<(int SpeakerId, int TrackId), int> best = candidates.FirstOrDefault(c => !usedTracks.Contains(c.Key.TrackId));
+            List<KeyValuePair<(int SpeakerId, int TrackId), double>> candidates = bySpeaker[speakerId];
+            KeyValuePair<(int SpeakerId, int TrackId), double> best = candidates.FirstOrDefault(c => !usedTracks.Contains(c.Key.TrackId));
             if (best.Key.TrackId > 0)
             {
                 _ = usedTracks.Add(best.Key.TrackId);
+                string? display = _segments.LastOrDefault(s => s.TrackId == best.Key.TrackId && !string.IsNullOrWhiteSpace(s.DisplayName))?.DisplayName;
                 map[speakerId] = new SpeakerFaceMapping
                 {
                     TrackId = best.Key.TrackId,
-                    DisplayName = null,
-                    Score = best.Value
+                    DisplayName = display,
+                    Score = (float)best.Value
                 };
             }
             else
@@ -417,6 +511,86 @@ public sealed class MeetingAnalyticsEngine
         }
 
         return map;
+    }
+
+    private void ResolveUtterancesWithAudioMapping(Dictionary<int, SpeakerFaceMapping> audioToFace)
+    {
+        for (int i = 0; i < _utterances.Count; i++)
+        {
+            Utterance u = _utterances[i];
+            int? spkId = u.AudioSpeakerId;
+            if (spkId == null && u.SpeakerKey.StartsWith("Audio:", StringComparison.OrdinalIgnoreCase))
+            {
+                string raw = u.SpeakerKey["Audio:".Length..].Trim();
+                if (int.TryParse(raw, out int parsed) && parsed > 0)
+                {
+                    spkId = parsed;
+                }
+            }
+
+            if (spkId.HasValue &&
+                audioToFace.TryGetValue(spkId.Value, out SpeakerFaceMapping map) &&
+                map.TrackId.HasValue)
+            {
+                int trackId = map.TrackId.Value;
+                string key = !string.IsNullOrWhiteSpace(map.DisplayName) ? $"Name:{map.DisplayName}" : $"Track:{trackId}";
+                _utterances[i] = new Utterance
+                {
+                    StartUtc = u.StartUtc,
+                    EndUtc = u.EndUtc,
+                    SpeakerKey = key,
+                    DisplayName = map.DisplayName,
+                    Text = u.Text,
+                    TrackId = trackId,
+                    AudioSpeakerId = spkId.Value
+                };
+            }
+        }
+    }
+
+    private List<SpeakerSegment> BuildAudioMappedSegments(Dictionary<int, SpeakerFaceMapping> audioToFace)
+    {
+        List<SpeakerSegment> mapped = new();
+        foreach (AudioSpeakerSegment a in _audioSegments.OrderBy(s => s.StartUtc))
+        {
+            SpeakerFaceMapping? m = audioToFace.TryGetValue(a.SpeakerId, out SpeakerFaceMapping mm) ? mm : null;
+            string? display = m?.DisplayName;
+            int? trackId = m?.TrackId;
+            string key = trackId.HasValue
+                ? (!string.IsNullOrWhiteSpace(display) ? $"Name:{display}" : $"Track:{trackId.Value}")
+                : $"Audio:{a.SpeakerId}";
+
+            mapped.Add(new SpeakerSegment
+            {
+                StartUtc = a.StartUtc,
+                EndUtc = a.EndUtc,
+                SpeakerKey = key,
+                DisplayName = display,
+                TrackId = trackId,
+                AudioSpeakerId = a.SpeakerId
+            });
+        }
+
+        // Merge adjacent segments with the same speaker key.
+        mapped.Sort((x, y) => x.StartUtc.CompareTo(y.StartUtc));
+        List<SpeakerSegment> merged = new();
+        foreach (SpeakerSegment seg in mapped)
+        {
+            SpeakerSegment? last = merged.LastOrDefault();
+            if (last != null &&
+                string.Equals(last.SpeakerKey, seg.SpeakerKey, StringComparison.OrdinalIgnoreCase) &&
+                last.EndUtc.HasValue &&
+                seg.EndUtc.HasValue &&
+                seg.StartUtc <= last.EndUtc.Value + TimeSpan.FromMilliseconds(200))
+            {
+                last.EndUtc = seg.EndUtc > last.EndUtc ? seg.EndUtc : last.EndUtc;
+                continue;
+            }
+
+            merged.Add(seg);
+        }
+
+        return merged;
     }
 
     /// <summary>

@@ -80,9 +80,7 @@ public partial class App : Application
                 services.AddSingleton(appConfig);
                 services.AddSingleton<IOptions<AppConfig>>(_ => Options.Create(appConfig));
 
-                // Pipeline factory
-                services.AddTransient<VisionPipeline>();
-                services.AddSingleton<Func<VisionPipeline>>(sp => () => sp.GetRequiredService<VisionPipeline>());
+                services.AddVisionEngineServices();
 
                 // UI
                 services.AddSingleton<MainWindow>();

@@ -2,17 +2,19 @@ using Config;
 using FacialRecognition.Domain;
 using Logging;
 using OpenCvSharp;
+using VisionEngine.Services;
 using SpeakerDetection;
 
 namespace VisionEngine.Stages;
 
-internal sealed class TalkNetAsdStage(AppConfig cfg, TalkNetAsdModel? talkNet) : IFrameStage, IDisposable
+internal sealed class TalkNetAsdStage(AppConfig cfg, IVisionModelProvider models) : IFrameStage, IDisposable
 {
     private readonly Dictionary<int, Queue<Mat>> _framesByTrack = new();
     private DateTime _lastLogUtc = DateTime.MinValue;
 
     public void Process(FrameContext ctx)
     {
+        TalkNetAsdModel? talkNet = models.TalkNetAsd;
         if (talkNet == null || !cfg.EnableTalkNetAsd || ctx.Frame.Mat == null || ctx.Frame.Mat.Empty())
         {
             foreach (Track t in ctx.Tracks)
@@ -187,4 +189,3 @@ internal sealed class TalkNetAsdStage(AppConfig cfg, TalkNetAsdModel? talkNet) :
         GC.SuppressFinalize(this);
     }
 }
-

@@ -1,12 +1,12 @@
 using Config;
-using FaceLandmarks;
 using Logging;
 using OpenCvSharp;
 using SpeakerDetection;
+using VisionEngine.Services;
 
 namespace VisionEngine.Stages;
 
-internal sealed class MouthMotionStage(AppConfig cfg, MouthMotionAnalyzer mouth, FaceMeshLandmarker? faceMesh) : IFrameStage
+internal sealed class MouthMotionStage(AppConfig cfg, MouthMotionAnalyzer mouth, IVisionModelProvider models) : IFrameStage
 {
     public void Process(FrameContext ctx)
     {
@@ -22,6 +22,7 @@ internal sealed class MouthMotionStage(AppConfig cfg, MouthMotionAnalyzer mouth,
             return;
         }
 
+        var faceMesh = models.FaceMesh;
         bool useFaceMesh = cfg.EnableFaceMeshLandmarks && faceMesh != null;
 
         foreach (FacialRecognition.Domain.Track t in ctx.Tracks)
@@ -86,4 +87,3 @@ internal sealed class MouthMotionStage(AppConfig cfg, MouthMotionAnalyzer mouth,
         return new Rect(x, y, rw, rh);
     }
 }
-

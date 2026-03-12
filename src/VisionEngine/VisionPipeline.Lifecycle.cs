@@ -4,6 +4,7 @@ using Logging;
 using MeetingAnalytics;
 using OpenCvSharp;
 using OverlayRenderer;
+using VisionEngine.Stages;
 
 namespace VisionEngine;
 
@@ -137,6 +138,13 @@ public partial class VisionPipeline
     /// </summary>
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
         Stop();
         _captureService.Dispose();
         if (_audioCapture != null)
@@ -146,9 +154,15 @@ public partial class VisionPipeline
 
         _audioCapture?.Dispose();
         _vad?.Dispose();
-        _talkNetStage?.Dispose();
-        _mouthMotionAnalyzer?.Dispose();
-        _faceMesh?.Dispose();
+        foreach (IFrameStage stage in _frameStages)
+        {
+            if (stage is IDisposable d)
+            {
+                d.Dispose();
+            }
+        }
+        _frameStages = [];
+
         if (_stt != null)
         {
             _stt.TranscriptReady -= OnTranscriptReady;
@@ -164,15 +178,6 @@ public partial class VisionPipeline
         }
 
         _diarizer?.Dispose();
-        _talkNet?.Dispose();
-        _analytics = null;
-        _faceDetector?.Dispose();
-        _recognizer?.Dispose();
-        _emotionClassifier?.Dispose();
-        _genderAgeClassifier?.Dispose();
-        _ageClassifier?.Dispose();
-        _genderClassifier?.Dispose();
-        _personRepo.Dispose();
         _frameQueue.Dispose();
 
         GC.SuppressFinalize(this);

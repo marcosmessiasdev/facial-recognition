@@ -1,24 +1,18 @@
-using AgeAnalysis;
 using Config;
 using EmotionAnalysis;
-using FaceAttributes;
-using FaceRecognition;
 using GenderAnalysis;
 using IdentityStore;
 using Logging;
 using MeetingAnalytics;
 using OpenCvSharp;
+using VisionEngine.Services;
 
 namespace VisionEngine.Stages;
 
 internal sealed class VisionInferenceStage(
     AppConfig cfg,
+    IVisionModelProvider models,
     PersonRepository personRepo,
-    ArcFaceRecognizer? recognizer,
-    EmotionClassifier? emotion,
-    GenderAgeClassifier? genderAge,
-    GenderClassifier? gender,
-    AgeClassifier? age,
     MeetingAnalyticsEngine? analytics) : IFrameStage
 {
     public void Process(FrameContext ctx)
@@ -44,6 +38,7 @@ internal sealed class VisionInferenceStage(
 
     private void RunRecognition(FrameContext ctx)
     {
+        var recognizer = models.Recognizer;
         if (recognizer == null || ctx.Tracks.Count == 0)
         {
             return;
@@ -95,6 +90,7 @@ internal sealed class VisionInferenceStage(
 
     private void RunEmotion(FrameContext ctx)
     {
+        var emotion = models.Emotion;
         if (emotion == null)
         {
             return;
@@ -145,6 +141,10 @@ internal sealed class VisionInferenceStage(
 
     private void RunAttributes(FrameContext ctx)
     {
+        var genderAge = models.GenderAge;
+        var gender = models.Gender;
+        var age = models.Age;
+
         if (genderAge != null)
         {
             foreach (FacialRecognition.Domain.Track t in ctx.Tracks)
@@ -318,4 +318,3 @@ internal sealed class VisionInferenceStage(
         return string.Join(" ", parts);
     }
 }
-

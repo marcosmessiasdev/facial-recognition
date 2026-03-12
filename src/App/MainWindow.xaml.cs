@@ -3,6 +3,7 @@ using System.Windows;
 using System.Diagnostics;
 using System.IO;
 using VisionEngine;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace FacialRecognitionApp;
 
@@ -44,23 +45,30 @@ public class WindowInfo
 public partial class MainWindow : Window, IDisposable
 {
     private VisionPipeline? _visionPipeline;
-    private readonly Func<VisionPipeline> _visionPipelineFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private IServiceScope? _pipelineScope;
     private IntPtr _selectedHwnd;
     private bool _disposed;
 
     /// <summary>
     /// Initializes a new instance of the MainWindow.
     /// </summary>
-    public MainWindow(Func<VisionPipeline> visionPipelineFactory)
+    public MainWindow(IServiceScopeFactory scopeFactory)
     {
-        _visionPipelineFactory = visionPipelineFactory ?? throw new ArgumentNullException(nameof(visionPipelineFactory));
+        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         InitializeComponent();
         Loaded += (_, _) => LoadOpenWindows();
     }
 
     // Design-time / fallback constructor (kept for XAML designer resilience).
-    public MainWindow() : this(() => new VisionPipeline())
+    public MainWindow() : this(new DummyScopeFactory())
     {
+    }
+
+    private sealed class DummyScopeFactory : IServiceScopeFactory
+    {
+        public IServiceScope CreateScope()
+            => throw new InvalidOperationException("IServiceScopeFactory is not available in design-time context. Run the app to use DI.");
     }
 
     /// <summary>
@@ -156,8 +164,9 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        _visionPipeline?.Dispose();
-        _visionPipeline = _visionPipelineFactory();
+        _pipelineScope?.Dispose();
+        _pipelineScope = _scopeFactory.CreateScope();
+        _visionPipeline = _pipelineScope.ServiceProvider.GetRequiredService<VisionPipeline>();
 
         _visionPipeline.Initialize(); // paths come from appsettings.json via AppConfig
         _visionPipeline.Start(_selectedHwnd);
@@ -172,8 +181,9 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     private void StopButton_Click(object sender, RoutedEventArgs e)
     {
-        _visionPipeline?.Dispose();
         _visionPipeline = null;
+        _pipelineScope?.Dispose();
+        _pipelineScope = null;
 
         StartButton.Visibility = Visibility.Visible;
         StopButton.Visibility = Visibility.Collapsed;
@@ -200,8 +210,9 @@ public partial class MainWindow : Window, IDisposable
         }
 
         _disposed = true;
-        _visionPipeline?.Dispose();
         _visionPipeline = null;
+        _pipelineScope?.Dispose();
+        _pipelineScope = null;
         GC.SuppressFinalize(this);
     }
 

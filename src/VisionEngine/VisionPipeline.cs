@@ -2,18 +2,10 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using WindowCapture;
 using FramePipeline;
-using FaceDetection;
 using FaceTracking;
-using FaceRecognition;
-using EmotionAnalysis;
-using AgeAnalysis;
-using GenderAnalysis;
-using FaceAttributes;
 using AudioProcessing;
-using SpeakerDetection;
 using SpeakerDiarization;
 using MeetingAnalytics;
-using FaceLandmarks;
 using SpeechProcessing;
 using IdentityStore;
 using OverlayRenderer;
@@ -23,6 +15,8 @@ using System.Windows;
 using Config;
 using Logging;
 using VisionEngine.Stages;
+using VisionEngine.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace VisionEngine;
 
@@ -59,6 +53,7 @@ namespace VisionEngine;
 /// </remarks>
 public partial class VisionPipeline : IDisposable
 {
+    private bool _disposed;
     private CancellationTokenSource? _cancellationTokenSource;
     private Task? _pipelineTask;
     private IntPtr _targetHwnd;
@@ -68,12 +63,6 @@ public partial class VisionPipeline : IDisposable
 
     // Modules
     private readonly GraphicsCaptureService _captureService;
-    private FaceDetector? _faceDetector;
-    private ArcFaceRecognizer? _recognizer;
-    private EmotionClassifier? _emotionClassifier;
-    private AgeClassifier? _ageClassifier;
-    private GenderClassifier? _genderClassifier;
-    private GenderAgeClassifier? _genderAgeClassifier;
     private IAudioCapture? _audioCapture;
     private SileroVad? _vad;
     private VadStateMachine? _vadStateMachine;
@@ -83,46 +72,35 @@ public partial class VisionPipeline : IDisposable
     private DateTime _lastAudioStatsLogUtc = DateTime.MinValue;
     private DateTime? _audioBaseUtc;
     private TimeSpan _lastAudioOffset;
-
-    private MeetingAnalyticsEngine? _analytics;
-    private FaceMeshLandmarker? _faceMesh;
+    private readonly MeetingAnalyticsEngine _analytics;
+    private readonly IFrameStagePipelineBuilder _pipelineBuilder;
     private StreamingWhisperPipeline? _stt;
     private volatile string? _lastTranscript;
     private OnlineSpeakerDiarizer? _diarizer;
     private int? _activeAudioSpeakerId;
     private float _activeAudioSpeakerConfidence;
     private volatile bool _acceptAudioFrames;
-    private readonly FaceTracker _tracker;
-    private readonly PersonRepository _personRepo = new();
     private BoundingBoxOverlay? _overlay;
     private readonly bool _overlayDebugLabels;
 
-    private TalkNetAsdModel? _talkNet;
-    private TalkNetAsdStage? _talkNetStage;
-    private MouthMotionAnalyzer? _mouthMotionAnalyzer;
-    private ActiveSpeakerDetector? _activeSpeakerDetector;
-    private List<IFrameStage> _frameStages = [];
-
     private readonly object _audioChunksSync = new();
     private readonly List<(TimeSpan Offset, float[] Samples)> _audioChunks = new();
+
+    private IReadOnlyList<IFrameStage> _frameStages = [];
 
     // Frame Queue -> Producer/Consumer (bounded to drop old frames and keep latency low)
     private readonly BlockingCollection<VisionFrame> _frameQueue;
 
     /// <summary>
-    /// Initializes a new instance of the VisionPipeline class using default configurations.
-    /// </summary>
-    public VisionPipeline() : this(AppConfig.Load()) { }
-
-    /// <summary>
     /// Initializes a new instance of the VisionPipeline class with a specific configuration.
     /// </summary>
     /// <param name="cfg">The configuration settings for the vision system.</param>
-    public VisionPipeline(AppConfig cfg)
+    public VisionPipeline(AppConfig cfg, IServiceProvider serviceProvider, MeetingAnalyticsEngine analytics)
     {
         _cfg = cfg;
         _overlayDebugLabels = string.Equals(_cfg.OverlayLabelMode, "debug", StringComparison.OrdinalIgnoreCase);
-        _tracker = new FaceTracker(_cfg.IouThreshold, _cfg.MaxMissedFrames);
+        _pipelineBuilder = serviceProvider.GetRequiredService<IFrameStagePipelineBuilder>();
+        _analytics = analytics;
         _frameQueue = new BlockingCollection<VisionFrame>(boundedCapacity: 2);
         _captureService = new GraphicsCaptureService();
         _captureService.RawFrameArrived += OnRawFrameArrived;
@@ -135,8 +113,7 @@ public partial class VisionPipeline : IDisposable
             string dbPath = Environment.GetEnvironmentVariable("identity_db") ??
                             Environment.GetEnvironmentVariable("IDENTITY_DB_PATH") ??
                             "identity.db";
-            int count = _personRepo.GetAll().Count;
-            AppLogger.Instance.Information("IdentityStore ready. Db={DbPath} Persons={Count}", dbPath, count);
+            AppLogger.Instance.Information("IdentityStore configured. Db={DbPath}", dbPath);
         }
         catch
         {
@@ -151,95 +128,7 @@ public partial class VisionPipeline : IDisposable
     public void Initialize()
     {
         string basedir = AppDomain.CurrentDomain.BaseDirectory;
-
-        string scrfdPath = Path.Combine(basedir, _cfg.ModelScrfd);
-        string arcfacePath = Path.Combine(basedir, _cfg.ModelArcface);
-        string fer2013Path = Path.Combine(basedir, _cfg.ModelFer2013);
-        string genderAgePath = Path.Combine(basedir, _cfg.ModelGenderAge);
-        string genderPath = Path.Combine(basedir, _cfg.ModelGender);
-        string agePath = Path.Combine(basedir, _cfg.ModelAge);
-
-        if (!File.Exists(scrfdPath))
-        {
-            throw new FileNotFoundException($"SCRFD model not found: {scrfdPath}");
-        }
-
-        _faceDetector = new FaceDetector(scrfdPath);
-        AppLogger.Instance.Information("FaceDetector loaded: {Path}", scrfdPath);
-
-        if (File.Exists(arcfacePath))
-        {
-            _recognizer = new ArcFaceRecognizer(arcfacePath);
-            AppLogger.Instance.Information("ArcFaceRecognizer loaded: {Path}", arcfacePath);
-        }
-        else
-        {
-            AppLogger.Instance.Warning("ArcFace model not found at {Path} — recognition disabled", arcfacePath);
-        }
-
-        if (File.Exists(fer2013Path))
-        {
-            _emotionClassifier = new EmotionClassifier(fer2013Path);
-            AppLogger.Instance.Information("EmotionClassifier loaded: {Path}", fer2013Path);
-        }
-        else
-        {
-            AppLogger.Instance.Warning("Emotion model not found at {Path} — emotion analysis disabled", fer2013Path);
-        }
-
-        bool wantAttributes = _cfg.EnableGenderPrediction || _cfg.EnableAgePrediction;
-        if (wantAttributes && File.Exists(genderAgePath))
-        {
-            _genderAgeClassifier = new GenderAgeClassifier(genderAgePath);
-            AppLogger.Instance.Information("GenderAgeClassifier loaded: {Path}", genderAgePath);
-        }
-        else
-        {
-            if (wantAttributes)
-            {
-                AppLogger.Instance.Warning("GenderAge model not found at {Path} — falling back to separate gender/age models", genderAgePath);
-            }
-
-            if (_cfg.EnableGenderPrediction)
-            {
-                if (File.Exists(genderPath))
-                {
-                    _genderClassifier = new GenderClassifier(genderPath);
-                    AppLogger.Instance.Information("GenderClassifier loaded: {Path}", genderPath);
-                }
-                else
-                {
-                    AppLogger.Instance.Warning("Gender model not found at {Path} — gender prediction disabled", genderPath);
-                }
-            }
-
-            if (_cfg.EnableAgePrediction)
-            {
-                if (File.Exists(agePath))
-                {
-                    _ageClassifier = new AgeClassifier(agePath);
-                    AppLogger.Instance.Information("AgeClassifier loaded: {Path}", agePath);
-                }
-                else
-                {
-                    AppLogger.Instance.Warning("Age model not found at {Path} — age prediction disabled", agePath);
-                }
-            }
-        }
-
-        if (_cfg.EnableFaceMeshLandmarks)
-        {
-            string faceMeshPath = Path.Combine(basedir, _cfg.ModelFaceMesh);
-            if (File.Exists(faceMeshPath))
-            {
-                _faceMesh = new FaceMeshLandmarker(faceMeshPath);
-                AppLogger.Instance.Information("FaceMeshLandmarker loaded: {Path}", faceMeshPath);
-            }
-            else
-            {
-                AppLogger.Instance.Warning("FaceMesh model not found at {Path} — using heuristic mouth motion only", faceMeshPath);
-            }
-        }
+        _frameStages = _pipelineBuilder.Build();
 
         if (_cfg.EnableTranscription)
         {
@@ -284,25 +173,6 @@ public partial class VisionPipeline : IDisposable
                 AppLogger.Instance.Warning("Speaker embedding model not found at {Path} — diarization disabled", embPath);
             }
         }
-
-        if (_cfg.EnableTalkNetAsd)
-        {
-            string talknetPath = Path.Combine(basedir, _cfg.ModelTalkNetAsd);
-            if (File.Exists(talknetPath))
-            {
-                _talkNet = new TalkNetAsdModel(talknetPath);
-                AppLogger.Instance.Information("TalkNet ASD enabled: {Path}", talknetPath);
-            }
-            else
-            {
-                AppLogger.Instance.Warning("TalkNet ASD model not found at {Path} — falling back to heuristics", talknetPath);
-            }
-        }
-
-        // Analytics/speaking logic exists even without audio VAD (visual-only fallback still works).
-        _analytics = new MeetingAnalyticsEngine();
-        _mouthMotionAnalyzer = new MouthMotionAnalyzer();
-        _activeSpeakerDetector = new ActiveSpeakerDetector();
 
         if (_cfg.EnableAudioVad)
         {
@@ -351,23 +221,7 @@ public partial class VisionPipeline : IDisposable
             }
         }
 
-        // Compose the frame pipeline stages (ordered).
-        _frameStages = new List<IFrameStage>
-        {
-            new FaceDetectionStage(_faceDetector!),
-            new FaceTrackingStage(_tracker),
-        };
-
-        if (_talkNet != null && _cfg.EnableTalkNetAsd)
-        {
-            _talkNetStage = new TalkNetAsdStage(_cfg, _talkNet);
-            _frameStages.Add(_talkNetStage);
-        }
-
-        _frameStages.Add(new MouthMotionStage(_cfg, _mouthMotionAnalyzer, _faceMesh));
-        _frameStages.Add(new VisionInferenceStage(_cfg, _personRepo, _recognizer, _emotionClassifier, _genderAgeClassifier, _genderClassifier, _ageClassifier, _analytics));
-        _frameStages.Add(new ActiveSpeakerStage(_cfg, _activeSpeakerDetector));
-        _frameStages.Add(new AnalyticsStage(_analytics));
+        // Frame stages are composed via DI (see IFrameStagePipelineBuilder).
     }
 
     /// <summary>
@@ -388,7 +242,7 @@ public partial class VisionPipeline : IDisposable
 
                 using (frame)
                 {
-                    if (_faceDetector == null || frame.Mat == null)
+                    if (frame.Mat == null || _frameStages.Count == 0)
                     {
                         continue;
                     }

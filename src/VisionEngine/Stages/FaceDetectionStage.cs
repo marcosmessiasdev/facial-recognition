@@ -1,13 +1,13 @@
-using FaceDetection;
 using Logging;
+using VisionEngine.Services;
 
 namespace VisionEngine.Stages;
 
-internal sealed class FaceDetectionStage(FaceDetector detector) : IFrameStage
+internal sealed class FaceDetectionStage(IVisionModelProvider models) : IFrameStage
 {
     public void Process(FrameContext ctx)
     {
-        ctx.Boxes = detector.Detect(ctx.Frame);
+        ctx.Boxes = models.FaceDetector.Detect(ctx.Frame);
 
         // Log face count every frame for E2E test log validation
         if (ctx.Boxes.Count > 0 || ctx.FrameCount % 30 == 0)
@@ -16,4 +16,3 @@ internal sealed class FaceDetectionStage(FaceDetector detector) : IFrameStage
         }
     }
 }
-

@@ -1,4 +1,4 @@
-using FacialRecognition.Core;
+using FacialRecognition.Domain;
 
 namespace FaceTracking;
 

@@ -1,4 +1,4 @@
-namespace FacialRecognition.Core;
+namespace FacialRecognition.Domain;
 
 /// <summary>
 /// Represents the temporal state and accumulated identity information for a single tracked face.
@@ -28,4 +28,3 @@ public sealed class Track
     public int FramesSinceLandmarks { get; set; } = 999;
     public int FramesSinceAsd { get; set; } = 999;
 }
-

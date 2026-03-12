@@ -1,6 +1,6 @@
 using System.Drawing;
 
-namespace FacialRecognition.Core;
+namespace FacialRecognition.Domain;
 
 /// <summary>
 /// Represents a rectangular region in an image where a face has been detected,
@@ -22,4 +22,3 @@ public sealed class BoundingBox
     /// </summary>
     public PointF[]? Landmarks { get; set; }
 }
-

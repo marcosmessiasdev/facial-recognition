@@ -17,7 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\\..\\Pipeline\\FramePipeline.csproj" />
-    <ProjectReference Include="..\\..\\Core\\Core.csproj" />
+    <ProjectReference Include="..\\..\\Domain\\Domain.csproj" />
   </ItemGroup>
 
 </Project>

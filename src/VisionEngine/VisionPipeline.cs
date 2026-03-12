@@ -17,7 +17,7 @@ using FaceLandmarks;
 using SpeechProcessing;
 using IdentityStore;
 using OverlayRenderer;
-using FacialRecognition.Core;
+using FacialRecognition.Domain;
 using OcvRect = OpenCvSharp.Rect;
 using OpenCvSharp;
 using System.Windows;

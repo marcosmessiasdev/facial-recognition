@@ -1,5 +1,5 @@
 using System.Text.Json;
-using FacialRecognition.Core;
+using FacialRecognition.Domain;
 
 namespace MeetingAnalytics;
 
@@ -628,10 +628,10 @@ public sealed class MeetingAnalyticsEngine
             }
 
             if (spkId.HasValue &&
-                audioToFace.TryGetValue(spkId.Value, out SpeakerFaceMapping map) &&
-                map.TrackId.HasValue)
+                audioToFace.TryGetValue(spkId.Value, out SpeakerFaceMapping? map) &&
+                map?.TrackId.HasValue == true)
             {
-                int trackId = map.TrackId.Value;
+                int trackId = map.TrackId!.Value;
                 string key = !string.IsNullOrWhiteSpace(map.DisplayName) ? $"Name:{map.DisplayName}" : $"Track:{trackId}";
                 _utterances[i] = new Utterance
                 {
@@ -716,7 +716,7 @@ public sealed class MeetingAnalyticsEngine
         List<SpeakerSegment> mapped = new();
         foreach (AudioSpeakerSegment a in _audioSegments.OrderBy(s => s.StartUtc))
         {
-            SpeakerFaceMapping? m = audioToFace.TryGetValue(a.SpeakerId, out SpeakerFaceMapping mm) ? mm : null;
+            SpeakerFaceMapping? m = audioToFace.TryGetValue(a.SpeakerId, out SpeakerFaceMapping? mm) ? mm : null;
             string? display = m?.DisplayName;
             int? trackId = m?.TrackId;
             string key = trackId.HasValue

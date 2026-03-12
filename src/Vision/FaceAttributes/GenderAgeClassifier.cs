@@ -1,5 +1,5 @@
 using System.Globalization;
-using FacialRecognition.Core;
+using FacialRecognition.Domain;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
@@ -253,4 +253,3 @@ public sealed class GenderAgeClassifier : IDisposable
         return outputs.Keys.First();
     }
 }
-

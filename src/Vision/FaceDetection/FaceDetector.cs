@@ -4,7 +4,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using OpenCvSharp;
 using FramePipeline;
-using FacialRecognition.Core;
+using FacialRecognition.Domain;
 
 namespace FaceDetection;
 

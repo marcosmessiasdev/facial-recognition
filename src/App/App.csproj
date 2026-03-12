@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Capture\WindowCapture.csproj" />
+    <ProjectReference Include="..\Pipeline\FramePipeline.csproj" />
+    <ProjectReference Include="..\Vision\FaceDetection\FaceDetection.csproj" />
+    <ProjectReference Include="..\Vision\FaceTracking\FaceTracking.csproj" />
+    <ProjectReference Include="..\Vision\FaceRecognition\FaceRecognition.csproj" />
+    <ProjectReference Include="..\Vision\EmotionAnalysis\EmotionAnalysis.csproj" />
+    <ProjectReference Include="..\Identity\IdentityStore.csproj" />
+    <ProjectReference Include="..\Overlay\OverlayRenderer.csproj" />
+    <ProjectReference Include="..\VisionEngine\VisionEngine.csproj" />
+    <ProjectReference Include="..\Infrastructure\Config\Config.csproj" />
+    <ProjectReference Include="..\Infrastructure\Logging\Logging.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.4" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.4" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.3" />
+    <PackageReference Include="OpenCvSharp4.Windows" Version="4.13.0.20260302" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWPF>true</UseWPF>
+    <NoWarn>$(NoWarn);SYSLIB1054</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="onnx\\**\\*.onnx" Exclude="onnx\\**\\.*.onnx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="onnx\\**\\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="onnx\\**\\*.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="models\\**\\*.*" Exclude="models\\**\\.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="demo\\**\\*.*" Exclude="demo\\**\\.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

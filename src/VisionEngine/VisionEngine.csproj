@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\\Core\\Core.csproj" />
+    <ProjectReference Include="..\Capture\WindowCapture.csproj" />
+    <ProjectReference Include="..\Pipeline\FramePipeline.csproj" />
+    <ProjectReference Include="..\Overlay\OverlayRenderer.csproj" />
+    <ProjectReference Include="..\Vision\FaceDetection\FaceDetection.csproj" />
+    <ProjectReference Include="..\Infrastructure\Config\Config.csproj" />
+    <ProjectReference Include="..\Infrastructure\Logging\Logging.csproj" />
+    <ProjectReference Include="..\Vision\FaceRecognition\FaceRecognition.csproj" />
+    <ProjectReference Include="..\Vision\EmotionAnalysis\EmotionAnalysis.csproj" />
+    <ProjectReference Include="..\Vision\AgeAnalysis\AgeAnalysis.csproj" />
+    <ProjectReference Include="..\Vision\GenderAnalysis\GenderAnalysis.csproj" />
+    <ProjectReference Include="..\Vision\FaceAttributes\FaceAttributes.csproj" />
+    <ProjectReference Include="..\Audio\AudioProcessing\AudioProcessing.csproj" />
+    <ProjectReference Include="..\Speaker\SpeakerDetection.csproj" />
+    <ProjectReference Include="..\Audio\SpeakerDiarization\SpeakerDiarization.csproj" />
+    <ProjectReference Include="..\Analytics\MeetingAnalytics.csproj" />
+    <ProjectReference Include="..\Vision\FaceTracking\FaceTracking.csproj" />
+    <ProjectReference Include="..\Identity\IdentityStore.csproj" />
+    <ProjectReference Include="..\Vision\FaceLandmarks\FaceLandmarks.csproj" />
+    <ProjectReference Include="..\Speech\SpeechProcessing.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>

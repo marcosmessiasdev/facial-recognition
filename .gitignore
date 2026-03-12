@@ -33,6 +33,7 @@ TestResults/
 
 ## Local E2E-only fixtures (avoid committing user-provided media)
 E2ETests/video/assets/*.gif
+tests/E2ETests/video/assets/*.gif
 
 ## OS specific
 .DS_Store

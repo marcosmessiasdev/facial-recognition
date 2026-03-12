@@ -24,7 +24,7 @@ public sealed class DiarizationSmokeTests
     }
 
     [Test]
-    [Description("Validates diarization produces segments and at least one stable speaker ID on an offline deterministic fixture.")]
+    [Description("Validates diarization produces segments and separates at least 2 speakers on an offline deterministic fixture.")]
 #pragma warning disable CA1707
     public void Test_Diarization_ProducesSegments_OnOfflineFixture()
 #pragma warning restore CA1707
@@ -151,7 +151,7 @@ public sealed class DiarizationSmokeTests
             Assert.That(framesRead, Is.GreaterThan(50), "Fixture too short or could not be read.");
             Assert.That(speechFrames, Is.GreaterThan(10), "Speech gate never activated; fixture generation or thresholds likely wrong.");
             Assert.That(segments, Is.GreaterThan(0), "Expected at least one diarization segment.");
-            Assert.That(speakers, Has.Count.GreaterThanOrEqualTo(1), "Expected at least one diarization speaker ID.");
+            Assert.That(speakers, Has.Count.GreaterThanOrEqualTo(2), "Expected at least 2 diarization speaker IDs on the two-speaker fixture.");
         });
     }
 

@@ -108,25 +108,33 @@ internal static class Program
             float[] basePcm = ReadWavToMonoFloat(baseFixture);
             float[] base16 = ResampleLinear(basePcm, DetectSampleRateHz(baseFixture), sr);
 
-            // Take a central 2.0s slice.
-            int start = Math.Min(base16.Length - 1, (int)(0.6 * sr));
-            int len = Math.Min(base16.Length - start, (int)(2.0 * sr));
-            a = base16.Skip(start).Take(len).ToArray();
+            // Take two different 2.0s slices (different content) to help separate embeddings.
+            int startA = Math.Min(base16.Length - 1, (int)(0.6 * sr));
+            int startB = Math.Min(base16.Length - 1, (int)(2.8 * sr));
+            int len = (int)(2.0 * sr);
+
+            a = base16.Skip(startA).Take(Math.Min(len, base16.Length - startA)).ToArray();
             if (a.Length < (int)(2.0 * sr))
             {
                 a = a.Concat(new float[(int)(2.0 * sr) - a.Length]).ToArray();
             }
 
-            // Create b by aggressive speed-up (pitch-up) then pad back to 2s,
-            // and apply a strong spectral tilt (pre-emphasis) to push embeddings apart.
-            float[] warped = ResampleByFactor(a, factor: 3.0);
-            b = new float[a.Length];
-            int copy = Math.Min(b.Length, warped.Length);
-            Array.Copy(warped, b, copy);
+            float[] b0 = base16.Skip(startB).Take(Math.Min(len, base16.Length - startB)).ToArray();
+            if (b0.Length < len)
+            {
+                b0 = b0.Concat(new float[len - b0.Length]).ToArray();
+            }
+
+            // Create b by pitch/speed warp + strong spectral/temporal effects, then tile to full length.
+            float[] warped = ResampleByFactor(b0, factor: 2.2);
+            b = TileToLength(warped, len);
 
             // Low-pass a slightly, pre-emphasize b (different spectral envelope).
             a = MovingAverageLowPass(a, taps: 5);
             b = PreEmphasis(b, alpha: 0.97f);
+            b = ApplyAmplitudeModulation(b, sr, hz: 5.5f, depth: 0.35f);
+            b = AddDeterministicNoise(b, seed: 777, scale: 0.015f);
+            b = SoftClip(b, drive: 2.2f);
         }
         else
         {
@@ -146,6 +154,84 @@ internal static class Program
         }
 
         WriteWav16Mono(outPath, sr, pcm);
+    }
+
+    private static float[] TileToLength(float[] x, int targetLen)
+    {
+        if (targetLen <= 0)
+        {
+            return [];
+        }
+
+        if (x.Length == 0)
+        {
+            return new float[targetLen];
+        }
+
+        float[] y = new float[targetLen];
+        for (int i = 0; i < y.Length; i++)
+        {
+            y[i] = x[i % x.Length];
+        }
+        return y;
+    }
+
+    private static float[] ApplyAmplitudeModulation(float[] x, int sr, float hz, float depth)
+    {
+        if (x.Length == 0 || sr <= 0)
+        {
+            return x;
+        }
+
+        depth = Math.Clamp(depth, 0f, 0.95f);
+        double step = 2.0 * Math.PI * Math.Clamp(hz, 0.2f, 12f) / sr;
+        double phase = 0.0;
+
+        float[] y = new float[x.Length];
+        for (int i = 0; i < x.Length; i++)
+        {
+            float m = 1f + (depth * (float)Math.Sin(phase));
+            phase += step;
+            y[i] = x[i] * m;
+        }
+        return y;
+    }
+
+    private static float[] AddDeterministicNoise(float[] x, int seed, float scale)
+    {
+        if (x.Length == 0 || scale <= 0f)
+        {
+            return x;
+        }
+
+        scale = Math.Clamp(scale, 0f, 0.2f);
+        Random rng = new(seed);
+        float[] y = new float[x.Length];
+        for (int i = 0; i < x.Length; i++)
+        {
+            float n = (float)((rng.NextDouble() * 2.0) - 1.0);
+            y[i] = x[i] + (scale * n);
+        }
+        return y;
+    }
+
+    private static float[] SoftClip(float[] x, float drive)
+    {
+        if (x.Length == 0)
+        {
+            return x;
+        }
+
+        drive = Math.Clamp(drive, 0.5f, 6.0f);
+        float[] y = new float[x.Length];
+        for (int i = 0; i < x.Length; i++)
+        {
+            float v = x[i] * drive;
+            // tanh soft clip
+            float c = (float)Math.Tanh(v);
+            y[i] = Math.Clamp(c, -0.98f, 0.98f);
+        }
+        return y;
     }
 
     private static float[] MovingAverageLowPass(float[] x, int taps)

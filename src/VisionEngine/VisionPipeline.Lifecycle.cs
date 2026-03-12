@@ -146,7 +146,8 @@ public partial class VisionPipeline
 
         _audioCapture?.Dispose();
         _vad?.Dispose();
-        _mouthAnalyzer?.Dispose();
+        _talkNetStage?.Dispose();
+        _mouthMotionAnalyzer?.Dispose();
         _faceMesh?.Dispose();
         if (_stt != null)
         {
@@ -164,14 +165,6 @@ public partial class VisionPipeline
 
         _diarizer?.Dispose();
         _talkNet?.Dispose();
-        foreach (Queue<Mat> q in _talkNetFramesByTrack.Values)
-        {
-            while (q.Count > 0)
-            {
-                q.Dequeue().Dispose();
-            }
-        }
-        _talkNetFramesByTrack.Clear();
         _analytics = null;
         _faceDetector?.Dispose();
         _recognizer?.Dispose();
@@ -185,4 +178,3 @@ public partial class VisionPipeline
         GC.SuppressFinalize(this);
     }
 }
-

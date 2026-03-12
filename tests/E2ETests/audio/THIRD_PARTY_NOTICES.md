@@ -5,6 +5,7 @@ This folder contains offline audio fixtures used by E2E tests.
 ## Audio
 
 - `e2e_fixture_10_words.wav` — generated locally for this repository (no third-party source)
+- `e2e_fixture_two_speakers.wav` — generated locally for this repository (no third-party source)
 
 ## Notes
 

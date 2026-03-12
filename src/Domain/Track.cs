@@ -23,6 +23,7 @@ public sealed class Track
 
     public int FramesSinceRecognition { get; set; } = 999;
     public int FramesSinceEmotion { get; set; } = 999;
+    public int FramesSinceEmotionDebugLog { get; set; } = 999;
     public int FramesSinceGender { get; set; } = 999;
     public int FramesSinceAge { get; set; } = 999;
     public int FramesSinceLandmarks { get; set; } = 999;

@@ -39,6 +39,15 @@ public class IdentityDbContext : DbContext
     /// <param name="optionsBuilder">The builder used to configure the context.</param>
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        _ = optionsBuilder.UseSqlite("Data Source=identity.db");
+        // Allow overriding the DB path for portability/tests. If unset, default to a local file.
+        string? dbPath = Environment.GetEnvironmentVariable("identity_db") ??
+                         Environment.GetEnvironmentVariable("IDENTITY_DB_PATH");
+
+        if (string.IsNullOrWhiteSpace(dbPath))
+        {
+            dbPath = "identity.db";
+        }
+
+        _ = optionsBuilder.UseSqlite($"Data Source={dbPath}");
     }
 }

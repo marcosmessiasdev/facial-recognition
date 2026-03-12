@@ -39,6 +39,23 @@ public class AppConfig
     /// <summary>Interval (in frames) between emotion analysis updates.</summary>
     public int EmotionInterval { get; set; } = 10;
 
+    /// <summary>
+    /// Additional margin (ratio) applied to the face bounding box when running emotion inference.
+    /// Helps include eyebrows/mouth context and mitigates tight crops.
+    /// </summary>
+    public float EmotionCropMarginRatio { get; set; } = 0.15f;
+
+    /// <summary>
+    /// If true, logs the full emotion probability vector periodically (Debug level).
+    /// Useful to diagnose "always Neutral xx%" symptoms.
+    /// </summary>
+    public bool EmotionDebugLogProbs { get; set; }
+
+    /// <summary>
+    /// Minimum frames between emotion probability-vector logs per track.
+    /// </summary>
+    public int EmotionDebugLogEveryNFrames { get; set; } = 60;
+
     /// <summary>Interval (in frames) for simultaneous age/gender attribute updates.</summary>
     public int AttributesInterval { get; set; } = 15;
 
@@ -191,6 +208,11 @@ public class AppConfig
 
     /// <summary>Enables or disables multimodal ASD (TalkNet ONNX).</summary>
     public bool EnableTalkNetAsd { get; set; } = true;
+
+    /// <summary>
+    /// Overlay label mode: "user" (minimal labels) or "debug" (full technical labels).
+    /// </summary>
+    public string OverlayLabelMode { get; set; } = "user";
 
     /// <summary>Temporal window size in frames for TalkNet (typically 25 for 1s @25fps).</summary>
     public int TalkNetWindowFrames { get; set; } = 25;

@@ -98,6 +98,7 @@ public partial class VisionPipeline : IDisposable
     private readonly FaceTracker _tracker;
     private readonly PersonRepository _personRepo = new();
     private BoundingBoxOverlay? _overlay;
+    private readonly bool _overlayDebugLabels;
 
     private TalkNetAsdModel? _talkNet;
     private readonly object _audioChunksSync = new();
@@ -119,6 +120,7 @@ public partial class VisionPipeline : IDisposable
     public VisionPipeline(AppConfig cfg)
     {
         _cfg = cfg;
+        _overlayDebugLabels = string.Equals(_cfg.OverlayLabelMode, "debug", StringComparison.OrdinalIgnoreCase);
         _tracker = new FaceTracker(_cfg.IouThreshold, _cfg.MaxMissedFrames);
         _frameQueue = new BlockingCollection<VisionFrame>(boundedCapacity: 2);
         _captureService = new GraphicsCaptureService();
@@ -126,6 +128,19 @@ public partial class VisionPipeline : IDisposable
 
         AppLogger.Instance.Information("VisionPipeline created. Config: FPS={Fps}, RecognitionInterval={Ri}",
             _cfg.CaptureFps, _cfg.RecognitionIntervalFrames);
+
+        try
+        {
+            string dbPath = Environment.GetEnvironmentVariable("identity_db") ??
+                            Environment.GetEnvironmentVariable("IDENTITY_DB_PATH") ??
+                            "identity.db";
+            int count = _personRepo.GetAll().Count;
+            AppLogger.Instance.Information("IdentityStore ready. Db={DbPath} Persons={Count}", dbPath, count);
+        }
+        catch
+        {
+            // ignore best-effort diagnostics
+        }
     }
 
     /// <summary>
@@ -376,348 +391,13 @@ public partial class VisionPipeline : IDisposable
                     List<Track> tracks = _tracker.Update(boxes);
 
                     // 2a. TalkNet ASD buffer + inference (multimodal)
-                    if (_talkNet != null)
-                    {
-                        float fps = Math.Max(1, _cfg.CaptureFps);
-                        int windowFrames = Math.Clamp(_cfg.TalkNetWindowFrames, 5, 60);
-                        DateTime nowUtc = DateTime.UtcNow;
-                        DateTime baseUtc = _audioBaseUtc ?? nowUtc;
-                        TimeSpan nowOffset = nowUtc - baseUtc;
-                        TimeSpan window = TimeSpan.FromSeconds(windowFrames / fps);
-
-                        foreach (Track track in tracks)
-                        {
-                            track.FramesSinceAsd++;
-
-                            OcvRect rect = new(
-                                    Math.Max(0, track.Box.X),
-                                    Math.Max(0, track.Box.Y),
-                                    Math.Min(track.Box.Width, frame.Mat.Width - track.Box.X),
-                                    Math.Min(track.Box.Height, frame.Mat.Height - track.Box.Y));
-
-                            if (rect.Width < 24 || rect.Height < 24)
-                            {
-                                continue;
-                            }
-
-                            using Mat crop = new(frame.Mat, rect);
-                            using Mat gray = new();
-                            if (crop.Channels() == 4)
-                            {
-                                Cv2.CvtColor(crop, gray, ColorConversionCodes.BGRA2GRAY);
-                            }
-                            else
-                            {
-                                Cv2.CvtColor(crop, gray, ColorConversionCodes.BGR2GRAY);
-                            }
-
-                            using Mat resized = new();
-                            Cv2.Resize(gray, resized, new OpenCvSharp.Size(112, 112));
-
-                            if (!_talkNetFramesByTrack.TryGetValue(track.Id, out Queue<Mat>? q))
-                            {
-                                q = new Queue<Mat>(windowFrames + 2);
-                                _talkNetFramesByTrack[track.Id] = q;
-                            }
-
-                            q.Enqueue(resized.Clone());
-                            while (q.Count > windowFrames)
-                            {
-                                Mat old = q.Dequeue();
-                                old.Dispose();
-                            }
-
-                            // Infer only when enough frames are buffered and at a modest cadence.
-                            if (q.Count == windowFrames && track.FramesSinceAsd >= 5 && TryGetRecentAudioWindow(nowOffset, window, out float[]? audio))
-                            {
-                                try
-                                {
-                                    float[] probs = _talkNet.Predict(audio, [.. q], fps);
-                                    if (probs.Length > 0)
-                                    {
-                                        float mean = 0f;
-                                        foreach (float p in probs)
-                                        {
-                                            mean += p;
-                                        }
-
-                                        mean /= probs.Length;
-                                        track.TalkNetSpeakingProb = mean;
-                                    }
-                                    track.FramesSinceAsd = 0;
-                                }
-                                catch (Exception ex)
-                                {
-                                    AppLogger.Instance.Debug(ex, "TalkNet ASD inference failed for track {Id}", track.Id);
-                                    track.TalkNetSpeakingProb = 0f;
-                                }
-                            }
-                        }
-
-                        // Prune stale tracks.
-                        HashSet<int> activeIds = [.. tracks.Select(t => t.Id)];
-                        int[] keys = [.. _talkNetFramesByTrack.Keys];
-                        foreach (int id in keys)
-                        {
-                            if (activeIds.Contains(id))
-                            {
-                                continue;
-                            }
-
-                            if (_talkNetFramesByTrack.TryGetValue(id, out Queue<Mat>? q))
-                            {
-                                while (q.Count > 0)
-                                {
-                                    q.Dequeue().Dispose();
-                                }
-                            }
-                            _ = _talkNetFramesByTrack.Remove(id);
-                        }
-                    }
+                    UpdateTalkNetAsd(frame, tracks);
 
                     // 2b. Mouth motion (cheap visual proxy for speaking)
-                    if (_mouthAnalyzer != null)
-                    {
-                        DateTime nowUtc = DateTime.UtcNow;
-                        foreach (Track track in tracks)
-                        {
-                            track.FramesSinceLandmarks++;
+                    UpdateMouthMotion(frame, tracks);
 
-                            OcvRect rectForMotion = new(
-                                Math.Max(0, track.Box.X),
-                                Math.Max(0, track.Box.Y),
-                                Math.Min(track.Box.Width, frame.Mat.Width - track.Box.X),
-                                Math.Min(track.Box.Height, frame.Mat.Height - track.Box.Y));
-
-                            if (rectForMotion.Width < 24 || rectForMotion.Height < 24)
-                            {
-                                track.MouthMotionScore = 0f;
-                                continue;
-                            }
-
-                            using Mat faceCropForMotion = new(frame.Mat, rectForMotion);
-
-                            OcvRect? mouthRoi = null;
-                            float? openRatio = track.MouthOpenRatio > 0 ? track.MouthOpenRatio : null;
-
-                            if (_faceMesh != null && track.FramesSinceLandmarks >= _cfg.FaceMeshIntervalFrames)
-                            {
-                                try
-                                {
-                                    if (_faceMesh.TryGetMouthMetrics(faceCropForMotion, out float ratio, out OcvRect roi))
-                                    {
-                                        track.MouthOpenRatio = ratio;
-                                        openRatio = ratio;
-                                        mouthRoi = roi;
-                                    }
-                                    track.FramesSinceLandmarks = 0;
-                                }
-                                catch (Exception ex)
-                                {
-                                    AppLogger.Instance.Debug(ex, "FaceMesh landmarks failed for track {Id}", track.Id);
-                                }
-                            }
-
-                            System.Drawing.PointF[]? lms = track.Box.Landmarks;
-                            if (mouthRoi == null && lms != null && lms.Length >= 5)
-                            {
-                                // SCRFD landmarks typically: [leftEye, rightEye, nose, leftMouth, rightMouth]
-                                System.Drawing.PointF leftMouth = lms[3];
-                                System.Drawing.PointF rightMouth = lms[4];
-
-                                float lmX1 = leftMouth.X - track.Box.X;
-                                float lmY1 = leftMouth.Y - track.Box.Y;
-                                float lmX2 = rightMouth.X - track.Box.X;
-                                float lmY2 = rightMouth.Y - track.Box.Y;
-
-                                float cx = (lmX1 + lmX2) / 2f;
-                                float cy = (lmY1 + lmY2) / 2f;
-                                float mouthWidth = MathF.Max(8f, MathF.Sqrt(((lmX2 - lmX1) * (lmX2 - lmX1)) + ((lmY2 - lmY1) * (lmY2 - lmY1))));
-
-                                int rw = (int)(mouthWidth * 2.0f);
-                                int rh = (int)(mouthWidth * 1.1f);
-                                int rx = (int)(cx - (rw / 2f));
-                                int ry = (int)(cy - (rh * 0.35f));
-
-                                rx = Math.Clamp(rx, 0, Math.Max(0, rectForMotion.Width - 1));
-                                ry = Math.Clamp(ry, 0, Math.Max(0, rectForMotion.Height - 1));
-                                rw = Math.Clamp(rw, 1, rectForMotion.Width - rx);
-                                rh = Math.Clamp(rh, 1, rectForMotion.Height - ry);
-                                mouthRoi = new OcvRect(rx, ry, rw, rh);
-                            }
-
-                            track.MouthMotionScore = _mouthAnalyzer.Update(track.Id, faceCropForMotion, mouthRoi, openRatio, nowUtc);
-                        }
-
-                        _mouthAnalyzer.PruneToActiveTracks(tracks.Select(t => t.Id));
-                    }
-
-                    // 3. Run classifiers at configured intervals per track
-                    foreach (Track track in tracks)
-                    {
-                        track.FramesSinceRecognition++;
-                        track.FramesSinceEmotion++;
-                        track.FramesSinceGender++;
-                        track.FramesSinceAge++;
-
-                        bool doRecognition = _recognizer != null &&
-                                             track.FramesSinceRecognition >= _cfg.RecognitionIntervalFrames;
-                        bool doEmotion = _emotionClassifier != null &&
-                                         track.FramesSinceEmotion >= _cfg.EmotionInterval;
-
-                        bool doAttributes = _genderAgeClassifier != null &&
-                                            (track.FramesSinceGender >= _cfg.AttributesInterval ||
-                                             track.FramesSinceAge >= _cfg.AttributesInterval);
-
-                        bool doGender = !doAttributes &&
-                                        _genderClassifier != null &&
-                                        track.FramesSinceGender >= _cfg.GenderInterval;
-                        bool doAge = !doAttributes &&
-                                     _ageClassifier != null &&
-                                     track.FramesSinceAge >= _cfg.AgeInterval;
-
-                        if (!doRecognition && !doEmotion && !doAttributes && !doGender && !doAge)
-                        {
-                            continue;
-                        }
-
-                        OcvRect rect = new(
-                            Math.Max(0, track.Box.X),
-                            Math.Max(0, track.Box.Y),
-                            Math.Min(track.Box.Width, frame.Mat.Width - track.Box.X),
-                            Math.Min(track.Box.Height, frame.Mat.Height - track.Box.Y));
-
-                        if (rect.Width < 16 || rect.Height < 16)
-                        {
-                            continue;
-                        }
-
-                        using Mat faceCrop = new(frame.Mat, rect);
-
-                        // 3a. ArcFace recognition + SQLite lookup
-                        if (doRecognition && _recognizer != null)
-                        {
-                            track.FramesSinceRecognition = 0;
-
-                            try
-                            {
-                                float[] embedding = _recognizer.GetEmbedding(faceCrop);
-                                (Person? person, float sim) = _personRepo.FindBestMatch(
-                                    embedding, (float)_cfg.RecognitionThreshold);
-                                track.PersonName = person != null
-                                    ? $"{person.Name} ({sim:P0})"
-                                    : "Desconhecido";
-                            }
-                            catch (Exception ex)
-                            {
-                                AppLogger.Instance.Error(ex, "Recognition inference error for track {Id}", track.Id);
-                            }
-                        }
-
-                        // 3b. Emotion classification
-                        if (doEmotion && _emotionClassifier != null)
-                        {
-                            track.FramesSinceEmotion = 0;
-
-                            try
-                            {
-                                (Emotion emotion, float conf) = _emotionClassifier.Classify(faceCrop);
-                                track.EmotionLabel = $"{emotion} {conf:P0}";
-                                _analytics?.AddEmotionSample(track, emotion.ToString(), conf, DateTime.UtcNow);
-                            }
-                            catch (Exception ex)
-                            {
-                                AppLogger.Instance.Error(ex, "Emotion inference error for track {Id}", track.Id);
-                            }
-                        }
-
-                        // 3c. Gender appearance prediction
-                        if (doAttributes && _genderAgeClassifier != null)
-                        {
-                            track.FramesSinceGender = 0;
-                            track.FramesSinceAge = 0;
-
-                            try
-                            {
-                                (string genderLabel, float genderConfidence, string ageLabel)? result = _genderAgeClassifier.Predict(frame.Mat, track.Box);
-                                if (result.HasValue)
-                                {
-                                    (string? gender, float genderConf, string? ageLabel) = result.Value;
-
-                                    if (_cfg.EnableGenderPrediction)
-                                    {
-                                        track.GenderLabel = $"{gender} {genderConf:P0}";
-                                    }
-
-                                    if (_cfg.EnableAgePrediction)
-                                    {
-                                        track.AgeLabel = $"Age {ageLabel}";
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                AppLogger.Instance.Error(ex, "Attributes inference error for track {Id}", track.Id);
-                            }
-                        }
-
-                        // 3c (fallback). Gender appearance prediction
-                        if (doGender && _genderClassifier != null)
-                        {
-                            track.FramesSinceGender = 0;
-
-                            try
-                            {
-                                (GenderAppearance gender, float conf) = _genderClassifier.Classify(faceCrop);
-                                track.GenderLabel = $"{gender} {conf:P0}";
-                            }
-                            catch (Exception ex)
-                            {
-                                AppLogger.Instance.Error(ex, "Gender inference error for track {Id}", track.Id);
-                            }
-                        }
-
-                        // 3d. Age bucket prediction
-                        if (doAge && _ageClassifier != null)
-                        {
-                            track.FramesSinceAge = 0;
-
-                            try
-                            {
-                                (AgeBucket _, string? label, float conf) = _ageClassifier.Classify(faceCrop);
-                                track.AgeLabel = $"Age {label} {conf:P0}";
-                            }
-                            catch (Exception ex)
-                            {
-                                AppLogger.Instance.Error(ex, "Age inference error for track {Id}", track.Id);
-                            }
-                        }
-                    }
-
-                    // 3e. Active speaker selection (audio VAD + mouth motion)
-                    int? activeSpeakerId = _activeSpeaker?.Update(tracks, _vadSpeechActive, _cfg.EnableVisualSpeakerFallback, DateTime.UtcNow);
-                    foreach (Track t in tracks)
-                    {
-                        t.IsSpeaking = activeSpeakerId.HasValue && t.Id == activeSpeakerId.Value;
-                    }
-
-                    // 3f. Meeting analytics (timeline + metrics)
-                    if (_analytics != null)
-                    {
-                        DateTime nowUtc = DateTime.UtcNow;
-                        // Avoid excessive segment churn from frame-level noise.
-                        if ((nowUtc - _lastAnalyticsUpdateUtc) > TimeSpan.FromMilliseconds(100))
-                        {
-                            _lastAnalyticsUpdateUtc = nowUtc;
-                            _analytics.Update(tracks, activeSpeakerId, nowUtc);
-
-                            int? audioSpk = _activeAudioSpeakerId;
-                            if (audioSpk.HasValue && activeSpeakerId.HasValue)
-                            {
-                                _analytics.ObserveAudioToFaceCooccurrence(audioSpk.Value, activeSpeakerId.Value);
-                            }
-                        }
-                    }
+                    // 3. Run classifiers + active speaker + analytics
+                    int? activeSpeakerId = RunVisionInferenceAndAnalytics(frame, tracks);
 
                     // 4. Align overlay with the target window using GetWindowRect
                     _ = GetWindowRect(_targetHwnd, out RECT winRect);
@@ -772,7 +452,7 @@ public partial class VisionPipeline : IDisposable
                     catch { /* ignore */ }
                     _ = Application.Current.Dispatcher.BeginInvoke(() =>
                     {
-                        _overlay?.UpdateTracks(snapshot, wWidth, wHeight, wLeft, wTop, hudText);
+                        _overlay?.UpdateTracks(snapshot, wWidth, wHeight, wLeft, wTop, _overlayDebugLabels, hudText);
                     });
                 }
             }
@@ -784,6 +464,556 @@ public partial class VisionPipeline : IDisposable
         }
 
         AppLogger.Instance.Information("Frame processing loop stopped after {Count} frames", frameCount);
+    }
+
+    private static OcvRect ClampRect(OcvRect r, int w, int h)
+    {
+        int x = Math.Clamp(r.X, 0, Math.Max(0, w - 1));
+        int y = Math.Clamp(r.Y, 0, Math.Max(0, h - 1));
+        int rw = Math.Clamp(r.Width, 1, w - x);
+        int rh = Math.Clamp(r.Height, 1, h - y);
+        return new OcvRect(x, y, rw, rh);
+    }
+
+    private static OcvRect ExpandRect(OcvRect r, float marginRatio, int w, int h)
+    {
+        if (marginRatio <= 0f)
+        {
+            return ClampRect(r, w, h);
+        }
+
+        int mx = (int)MathF.Round(r.Width * marginRatio);
+        int my = (int)MathF.Round(r.Height * marginRatio);
+        OcvRect expanded = new(r.X - mx, r.Y - my, r.Width + (2 * mx), r.Height + (2 * my));
+        return ClampRect(expanded, w, h);
+    }
+
+    private static (Emotion e1, float p1, Emotion e2, float p2) Top2Emotion(float[] probs)
+    {
+        if (probs.Length == 0)
+        {
+            return (Emotion.Neutral, 0f, Emotion.Neutral, 0f);
+        }
+
+        int n = Math.Min(probs.Length, 8);
+        int best1 = 0;
+        int best2 = 0;
+        float pBest1 = probs[0];
+        float pBest2 = float.NegativeInfinity;
+
+        for (int i = 1; i < n; i++)
+        {
+            float p = probs[i];
+            if (p > pBest1)
+            {
+                best2 = best1;
+                pBest2 = pBest1;
+                best1 = i;
+                pBest1 = p;
+            }
+            else if (p > pBest2)
+            {
+                best2 = i;
+                pBest2 = p;
+            }
+        }
+
+        Emotion e1 = (Emotion)best1;
+        Emotion e2 = (Emotion)best2;
+        float p1 = float.IsFinite(pBest1) ? pBest1 : 0f;
+        float p2 = float.IsFinite(pBest2) ? pBest2 : 0f;
+        return (e1, p1, e2, p2);
+    }
+
+    private static string FormatEmotionProbs(float[] probs)
+    {
+        int n = Math.Min(probs.Length, 8);
+        if (n <= 0)
+        {
+            return string.Empty;
+        }
+
+        string[] parts = new string[n];
+        for (int i = 0; i < n; i++)
+        {
+            parts[i] = $"{(Emotion)i}={probs[i]:0.000}";
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    private void UpdateTalkNetAsd(VisionFrame frame, List<Track> tracks)
+    {
+        TalkNetAsdModel? talkNet = _talkNet;
+        if (talkNet == null || !_cfg.EnableTalkNetAsd || frame.Mat == null || frame.Mat.Empty())
+        {
+            foreach (Track t in tracks)
+            {
+                t.TalkNetSpeakingProb = 0f;
+                t.FramesSinceAsd++;
+            }
+
+            // Still prune to active tracks to avoid unbounded growth.
+            PruneTalkNetQueues(tracks);
+            return;
+        }
+
+        DateTime nowUtc = DateTime.UtcNow;
+        int windowFrames = Math.Clamp(_cfg.TalkNetWindowFrames, 5, 60);
+        float fps = Math.Clamp(_cfg.CaptureFps, 10, 60);
+        TimeSpan window = TimeSpan.FromSeconds(windowFrames / fps);
+
+        // 1) Append latest visual frame per track into temporal queues.
+        foreach (Track t in tracks)
+        {
+            t.FramesSinceAsd++;
+
+            if (t.Box.Width <= 2 || t.Box.Height <= 2)
+            {
+                continue;
+            }
+
+            OcvRect rect = new(t.Box.X, t.Box.Y, t.Box.Width, t.Box.Height);
+            rect = ClampRect(rect, frame.Mat.Width, frame.Mat.Height);
+            if (rect.Width < 8 || rect.Height < 8)
+            {
+                continue;
+            }
+
+            using Mat face = new(frame.Mat, rect);
+            using Mat gray = new();
+            if (face.Channels() == 4)
+            {
+                Cv2.CvtColor(face, gray, ColorConversionCodes.BGRA2GRAY);
+            }
+            else if (face.Channels() == 3)
+            {
+                Cv2.CvtColor(face, gray, ColorConversionCodes.BGR2GRAY);
+            }
+            else
+            {
+                face.CopyTo(gray);
+            }
+
+            Mat resized = new();
+            Cv2.Resize(gray, resized, new OpenCvSharp.Size(112, 112));
+
+            if (!_talkNetFramesByTrack.TryGetValue(t.Id, out Queue<Mat>? q))
+            {
+                q = new Queue<Mat>(windowFrames + 2);
+                _talkNetFramesByTrack[t.Id] = q;
+            }
+
+            q.Enqueue(resized);
+            while (q.Count > windowFrames)
+            {
+                Mat old = q.Dequeue();
+                old.Dispose();
+            }
+        }
+
+        PruneTalkNetQueues(tracks);
+
+        // 2) Run inference on tracks that have a full window and a recent audio window.
+        // Use the most recent audio offset as end bound.
+        if (_cfg.EnableAudioVad && _audioCapture != null && TryGetRecentAudioWindow(_lastAudioOffset, window, out float[] audio))
+        {
+            foreach (Track t in tracks)
+            {
+                if (!_talkNetFramesByTrack.TryGetValue(t.Id, out Queue<Mat>? q) || q.Count < windowFrames)
+                {
+                    t.TalkNetSpeakingProb = 0f;
+                    continue;
+                }
+
+                // Throttle TalkNet per track for performance.
+                if (t.FramesSinceAsd < 2)
+                {
+                    continue;
+                }
+
+                float[] probs;
+                try
+                {
+                    probs = talkNet.Predict(audio, q.ToArray(), fps);
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Debug(ex, "TalkNet ASD inference failed (best-effort)");
+                    t.TalkNetSpeakingProb = 0f;
+                    continue;
+                }
+
+                float v = probs.Length > 0 ? probs[^1] : 0f;
+                float p = (v < 0f || v > 1f) ? Sigmoid(v) : v;
+                p = Math.Clamp(p, 0f, 1f);
+                t.TalkNetSpeakingProb = p;
+                t.FramesSinceAsd = 0;
+            }
+        }
+        else
+        {
+            foreach (Track t in tracks)
+            {
+                t.TalkNetSpeakingProb = 0f;
+            }
+        }
+
+        // Best-effort telemetry.
+        if ((nowUtc - _lastVadLogUtc) > TimeSpan.FromSeconds(5))
+        {
+            _lastVadLogUtc = nowUtc;
+            float max = tracks.Count > 0 ? tracks.Max(t => t.TalkNetSpeakingProb) : 0f;
+            if (max > 0.0001f)
+            {
+                AppLogger.Instance.Debug("TalkNet ASD maxProb={Prob:0.000}", max);
+            }
+        }
+    }
+
+    private void UpdateMouthMotion(VisionFrame frame, List<Track> tracks)
+    {
+        MouthMotionAnalyzer? mouth = _mouthAnalyzer;
+        if (mouth == null || frame.Mat == null || frame.Mat.Empty())
+        {
+            foreach (Track t in tracks)
+            {
+                t.MouthMotionScore = 0f;
+                t.MouthOpenRatio = 0f;
+                t.FramesSinceLandmarks++;
+            }
+
+            return;
+        }
+
+        DateTime nowUtc = DateTime.UtcNow;
+        FaceMeshLandmarker? faceMesh = _faceMesh;
+        bool useFaceMesh = _cfg.EnableFaceMeshLandmarks && faceMesh != null;
+
+        foreach (Track t in tracks)
+        {
+            t.FramesSinceLandmarks++;
+
+            OcvRect rect = new(t.Box.X, t.Box.Y, t.Box.Width, t.Box.Height);
+            rect = ClampRect(rect, frame.Mat.Width, frame.Mat.Height);
+            if (rect.Width < 16 || rect.Height < 16)
+            {
+                t.MouthMotionScore = 0f;
+                continue;
+            }
+
+            using Mat face = new(frame.Mat, rect);
+            using Mat faceClone = face.Clone();
+
+            OpenCvSharp.Rect? mouthRoi = null;
+            float? openRatio = null;
+
+            if (useFaceMesh && t.FramesSinceLandmarks >= _cfg.FaceMeshIntervalFrames)
+            {
+                try
+                {
+                    if (faceMesh!.TryGetMouthMetrics(faceClone, out float r, out OpenCvSharp.Rect roi))
+                    {
+                        mouthRoi = roi;
+                        openRatio = r;
+                        t.MouthOpenRatio = r;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Debug(ex, "FaceMesh mouth metrics failed (best-effort)");
+                }
+
+                t.FramesSinceLandmarks = 0;
+            }
+
+            float score;
+            try
+            {
+                score = mouth.Update(t.Id, faceClone, mouthRoi, openRatio, nowUtc);
+            }
+            catch
+            {
+                score = 0f;
+            }
+
+            t.MouthMotionScore = score;
+        }
+
+        mouth.PruneToActiveTracks(tracks.Select(t => t.Id));
+    }
+
+    private int? RunVisionInferenceAndAnalytics(VisionFrame frame, List<Track> tracks)
+    {
+        DateTime nowUtc = DateTime.UtcNow;
+
+        foreach (Track t in tracks)
+        {
+            t.FramesSinceRecognition++;
+            t.FramesSinceEmotion++;
+            t.FramesSinceEmotionDebugLog++;
+            t.FramesSinceGender++;
+            t.FramesSinceAge++;
+        }
+
+        // Recognition (ArcFace + IdentityStore)
+        if (_recognizer != null && tracks.Count > 0)
+        {
+            foreach (Track t in tracks)
+            {
+                if (t.FramesSinceRecognition < _cfg.RecognitionIntervalFrames)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    OcvRect rect = new(t.Box.X, t.Box.Y, t.Box.Width, t.Box.Height);
+                    rect = ClampRect(rect, frame.Mat.Width, frame.Mat.Height);
+                    if (rect.Width < 16 || rect.Height < 16)
+                    {
+                        continue;
+                    }
+
+                    using Mat face = new(frame.Mat, rect);
+                    using Mat crop = face.Clone();
+                    float[] emb = _recognizer.GetEmbedding(crop);
+
+                    (Person? person, float sim) = _personRepo.FindBestMatch(emb, threshold: (float)_cfg.RecognitionThreshold);
+                    if (person != null && !string.IsNullOrWhiteSpace(person.Name))
+                    {
+                        string newName = $"{person.Name} ({sim:P0})";
+                        bool changed = string.IsNullOrWhiteSpace(t.PersonName) ||
+                                       !t.PersonName.StartsWith(person.Name, StringComparison.OrdinalIgnoreCase);
+                        t.PersonName = newName;
+                        if (changed)
+                        {
+                            AppLogger.Instance.Information("Recognized: {Name} sim={Sim:0.00} track={TrackId}", person.Name, sim, t.Id);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Warning(ex, "Recognition inference error");
+                }
+                finally
+                {
+                    t.FramesSinceRecognition = 0;
+                }
+            }
+        }
+
+        // Emotion (FER2013)
+        if (_emotionClassifier != null)
+        {
+            foreach (Track t in tracks)
+            {
+                if (t.FramesSinceEmotion < _cfg.EmotionInterval)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    OcvRect rect = new(t.Box.X, t.Box.Y, t.Box.Width, t.Box.Height);
+                    rect = ExpandRect(rect, _cfg.EmotionCropMarginRatio, frame.Mat.Width, frame.Mat.Height);
+                    if (rect.Width < 16 || rect.Height < 16)
+                    {
+                        continue;
+                    }
+
+                    using Mat face = new(frame.Mat, rect);
+                    using Mat crop = face.Clone();
+
+                    float[] probs = _emotionClassifier.GetProbabilities(crop);
+                    (Emotion e1, float p1, Emotion e2, float p2) = Top2Emotion(probs);
+
+                    t.EmotionLabel = $"{e1} {p1:P0}  P2 {e2} {p2:P0}";
+                    _analytics?.AddEmotionSample(t, e1.ToString(), p1, nowUtc);
+
+                    if (_cfg.EmotionDebugLogProbs &&
+                        t.FramesSinceEmotionDebugLog >= Math.Max(1, _cfg.EmotionDebugLogEveryNFrames))
+                    {
+                        t.FramesSinceEmotionDebugLog = 0;
+                        string vec = FormatEmotionProbs(probs);
+                        AppLogger.Instance.Debug("Emotion probs track={TrackId}: {Vec}", t.Id, vec);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Debug(ex, "Emotion inference failed (best-effort)");
+                }
+                finally
+                {
+                    t.FramesSinceEmotion = 0;
+                }
+            }
+        }
+
+        // Attributes (gender/age)
+        if (_genderAgeClassifier != null)
+        {
+            foreach (Track t in tracks)
+            {
+                if (t.FramesSinceGender < _cfg.AttributesInterval)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    (string genderLabel, float genderConfidence, string ageLabel)? res = _genderAgeClassifier.Predict(frame.Mat, t.Box);
+                    if (res.HasValue)
+                    {
+                        t.GenderLabel = $"{res.Value.genderLabel} {res.Value.genderConfidence:P0}";
+                        t.AgeLabel = $"Age {res.Value.ageLabel}";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Debug(ex, "GenderAge inference failed (best-effort)");
+                }
+                finally
+                {
+                    t.FramesSinceGender = 0;
+                    t.FramesSinceAge = 0;
+                }
+            }
+        }
+        else
+        {
+            if (_genderClassifier != null)
+            {
+                foreach (Track t in tracks)
+                {
+                    if (t.FramesSinceGender < _cfg.GenderInterval)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        OcvRect rect = new(t.Box.X, t.Box.Y, t.Box.Width, t.Box.Height);
+                        rect = ClampRect(rect, frame.Mat.Width, frame.Mat.Height);
+                        if (rect.Width < 16 || rect.Height < 16)
+                        {
+                            continue;
+                        }
+
+                        using Mat face = new(frame.Mat, rect);
+                        using Mat crop = face.Clone();
+                        (GenderAppearance g, float conf) = _genderClassifier.Classify(crop);
+                        t.GenderLabel = $"{g} {conf:P0}";
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Instance.Debug(ex, "Gender inference failed (best-effort)");
+                    }
+                    finally
+                    {
+                        t.FramesSinceGender = 0;
+                    }
+                }
+            }
+
+            if (_ageClassifier != null)
+            {
+                foreach (Track t in tracks)
+                {
+                    if (t.FramesSinceAge < _cfg.AgeInterval)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        OcvRect rect = new(t.Box.X, t.Box.Y, t.Box.Width, t.Box.Height);
+                        rect = ClampRect(rect, frame.Mat.Width, frame.Mat.Height);
+                        if (rect.Width < 16 || rect.Height < 16)
+                        {
+                            continue;
+                        }
+
+                        using Mat face = new(frame.Mat, rect);
+                        using Mat crop = face.Clone();
+                        (_, string label, float conf) = _ageClassifier.Classify(crop);
+                        t.AgeLabel = $"Age {label} {conf:P0}";
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Instance.Debug(ex, "Age inference failed (best-effort)");
+                    }
+                    finally
+                    {
+                        t.FramesSinceAge = 0;
+                    }
+                }
+            }
+        }
+
+        // Active speaker (TalkNet preferred, otherwise mouth motion) + analytics.
+        int? activeSpeakerId = null;
+        if (_activeSpeaker != null)
+        {
+            activeSpeakerId = _activeSpeaker.Update(tracks, _vadSpeechActive, _cfg.EnableVisualSpeakerFallback, nowUtc);
+            foreach (Track t in tracks)
+            {
+                t.IsSpeaking = activeSpeakerId.HasValue && t.Id == activeSpeakerId.Value;
+            }
+        }
+
+        try
+        {
+            if (_analytics != null && (nowUtc - _lastAnalyticsUpdateUtc) > TimeSpan.FromMilliseconds(120))
+            {
+                _lastAnalyticsUpdateUtc = nowUtc;
+                _analytics.Update(tracks, activeSpeakerId, nowUtc);
+
+                // Record audio↔face co-occurrence for mapping diarization clusters to visual tracks.
+                if (_activeAudioSpeakerId.HasValue && activeSpeakerId.HasValue)
+                {
+                    _analytics.ObserveAudioToFaceCooccurrence(_activeAudioSpeakerId.Value, activeSpeakerId.Value);
+                }
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return activeSpeakerId;
+    }
+
+    private void PruneTalkNetQueues(IEnumerable<Track> tracks)
+    {
+        HashSet<int> keep = [.. tracks.Select(t => t.Id)];
+        int[] remove = [.. _talkNetFramesByTrack.Keys.Where(id => !keep.Contains(id))];
+        foreach (int id in remove)
+        {
+            if (_talkNetFramesByTrack.TryGetValue(id, out Queue<Mat>? q))
+            {
+                while (q.Count > 0)
+                {
+                    q.Dequeue().Dispose();
+                }
+            }
+
+            _ = _talkNetFramesByTrack.Remove(id);
+        }
+    }
+
+    private static float Sigmoid(float x)
+    {
+        if (x >= 0)
+        {
+            float z = MathF.Exp(-x);
+            return 1f / (1f + z);
+        }
+        else
+        {
+            float z = MathF.Exp(x);
+            return z / (1f + z);
+        }
     }
 
     [LibraryImport("user32.dll", EntryPoint = "GetWindowRect", SetLastError = true)]

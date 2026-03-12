@@ -72,6 +72,17 @@ public class EmotionClassifier : IDisposable
     /// <returns>A tuple containing the predicted Emotion and the confidence score (0.0 to 1.0).</returns>
     public (Emotion emotion, float confidence) Classify(Mat faceCrop)
     {
+        float[] probs = GetProbabilities(faceCrop);
+        int bestIdx = Array.IndexOf(probs, probs.Max());
+        Emotion label = bestIdx < Labels.Length ? Labels[bestIdx] : Emotion.Neutral;
+        return (label, probs[bestIdx]);
+    }
+
+    /// <summary>
+    /// Returns the full probability vector (Softmax) aligned to the <see cref="Emotion"/> labels.
+    /// </summary>
+    public float[] GetProbabilities(Mat faceCrop)
+    {
         ArgumentNullException.ThrowIfNull(faceCrop);
 
         using Mat gray = new();
@@ -113,14 +124,48 @@ public class EmotionClassifier : IDisposable
         using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(inputs);
         float[] scores = [.. results.First(r => r.Name == _outputName).AsEnumerable<float>()];
 
-        // Softmax to get probabilities  
-        float maxScore = scores.Max();
-        float sumExp = scores.Sum(s => MathF.Exp(s - maxScore));
-        float[] probs = [.. scores.Select(s => MathF.Exp(s - maxScore) / sumExp)];
+        int n = Math.Min(scores.Length, Labels.Length);
+        if (n <= 0)
+        {
+            return new float[Labels.Length];
+        }
 
-        int bestIdx = Array.IndexOf(probs, probs.Max());
-        Emotion label = bestIdx < Labels.Length ? Labels[bestIdx] : Emotion.Neutral;
-        return (label, probs[bestIdx]);
+        float maxScore = scores.Take(n).Max();
+        float sumExp = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            sumExp += MathF.Exp(scores[i] - maxScore);
+        }
+
+        float inv = sumExp > 0f ? (1f / sumExp) : 0f;
+        float[] probs = new float[Labels.Length];
+        for (int i = 0; i < n; i++)
+        {
+            probs[i] = MathF.Exp(scores[i] - maxScore) * inv;
+        }
+
+        return probs;
+    }
+
+    /// <summary>
+    /// Returns the Top-K emotions with probabilities (descending).
+    /// </summary>
+    public (Emotion emotion, float probability)[] ClassifyTopK(Mat faceCrop, int k)
+    {
+        if (k <= 0)
+        {
+            return [];
+        }
+
+        float[] probs = GetProbabilities(faceCrop);
+        int n = Math.Min(probs.Length, Labels.Length);
+        return probs
+            .Take(n)
+            .Select((p, i) => (emotion: Labels[i], probability: p))
+            .OrderByDescending(t => t.probability)
+            .Take(k)
+            .Select(t => (t.emotion, t.probability))
+            .ToArray();
     }
 
     /// <summary>

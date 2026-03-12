@@ -81,7 +81,7 @@ public partial class BoundingBoxOverlay : Window
     /// 1. Resizes and re-positions the WPF Window to exactly match the target application's boundaries.
     /// 2. Clears and rebuilds the visual Canvas with rectangles and text labels based on updated tracking data.
     /// </remarks>
-    public void UpdateTracks(List<Track> tracks, int windowWidth, int windowHeight, int overlayLeft, int overlayTop, string? hudText = null)
+    public void UpdateTracks(List<Track> tracks, int windowWidth, int windowHeight, int overlayLeft, int overlayTop, bool debugLabels = true, string? hudText = null)
     {
         ArgumentNullException.ThrowIfNull(tracks);
 
@@ -125,47 +125,7 @@ public partial class BoundingBoxOverlay : Window
             Canvas.SetTop(rect, box.Y);
             _ = _canvas.Children.Add(rect);
 
-            // Label: Name + Emotion
-            string label = "";
-            if (!string.IsNullOrEmpty(track.PersonName))
-            {
-                label += track.PersonName;
-            }
-
-            if (track.IsSpeaking)
-            {
-                label += "  [Speaking]";
-            }
-
-            if (track.SpeakingScore > 0.0001f)
-            {
-                label += $"  [SpeakScore {track.SpeakingScore:P0}]";
-            }
-
-            if (track.TalkNetSpeakingProb > 0.0001f)
-            {
-                label += $"  [TalkNet {track.TalkNetSpeakingProb:P0}]";
-            }
-
-            if (!string.IsNullOrEmpty(track.EmotionLabel))
-            {
-                label += $"  [{track.EmotionLabel}]";
-            }
-
-            if (!string.IsNullOrEmpty(track.GenderLabel))
-            {
-                label += $"  [{track.GenderLabel}]";
-            }
-
-            if (!string.IsNullOrEmpty(track.AgeLabel))
-            {
-                label += $"  [{track.AgeLabel}]";
-            }
-
-            if (string.IsNullOrEmpty(label))
-            {
-                label = $"#{track.Id}  {box.Confidence:P0}";
-            }
+            string label = BuildLabel(track, box, debugLabels);
 
             TextBlock text = new()
             {
@@ -179,6 +139,56 @@ public partial class BoundingBoxOverlay : Window
             Canvas.SetTop(text, Math.Max(0, box.Y - 22));
             _ = _canvas.Children.Add(text);
         }
+    }
+
+    private static string BuildLabel(Track track, BoundingBox box, bool debugLabels)
+    {
+        string name = !string.IsNullOrWhiteSpace(track.PersonName) ? track.PersonName : "Desconhecido";
+
+        if (!debugLabels)
+        {
+            return track.IsSpeaking ? $"{name}  Speaking" : name;
+        }
+
+        // Debug label: show full technical info.
+        string label = name;
+
+        if (track.IsSpeaking)
+        {
+            label += "  [Speaking]";
+        }
+
+        if (track.SpeakingScore > 0.0001f)
+        {
+            label += $"  [SpeakScore {track.SpeakingScore:P0}]";
+        }
+
+        if (track.TalkNetSpeakingProb > 0.0001f)
+        {
+            label += $"  [TalkNet {track.TalkNetSpeakingProb:P0}]";
+        }
+
+        if (!string.IsNullOrEmpty(track.EmotionLabel))
+        {
+            label += $"  [{track.EmotionLabel}]";
+        }
+
+        if (!string.IsNullOrEmpty(track.GenderLabel))
+        {
+            label += $"  [{track.GenderLabel}]";
+        }
+
+        if (!string.IsNullOrEmpty(track.AgeLabel))
+        {
+            label += $"  [{track.AgeLabel}]";
+        }
+
+        if (string.IsNullOrEmpty(label))
+        {
+            label = $"#{track.Id}  {box.Confidence:P0}";
+        }
+
+        return label;
     }
 
     private const int GWL_EXSTYLE = -20;

@@ -140,6 +140,52 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
         _playwright?.Dispose();
     }
 
+    [Test, Order(2)]
+    [Category("E2E")]
+    [Description("Validates face recognition persists across app restart using the same offline identity.db (no reseed).")]
+    public async Task TestRecognitionPersistsAcrossRestart()
+    {
+        async Task RunAndExpectRecognitionOnce(int runMs)
+        {
+            Button? refreshBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("RefreshButton"))?.AsButton());
+            refreshBtn?.Invoke();
+            await Task.Delay(700);
+
+            ListBox? listBox = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("WindowListBox"))?.AsListBox());
+            string titleHint = _pageTitle ?? "E2E Faces Grid";
+            ListBoxItem? browserItem = listBox!.Items.FirstOrDefault(i =>
+                i.Name.Contains(titleHint, StringComparison.OrdinalIgnoreCase) ||
+                i.Name.Contains("E2E Faces Grid", StringComparison.OrdinalIgnoreCase));
+
+            Assert.That(browserItem, Is.Not.Null, "Browser window not found in app list after refresh.");
+            _ = browserItem!.Select();
+
+            Button? startBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("StartButton"))?.AsButton());
+            Assert.That(startBtn, Is.Not.Null, "StartButton not found");
+            startBtn!.Invoke();
+
+            WaitForLogContains("Capture started", timeoutMs: 120_000);
+            WaitForLogContainsAny(["Recognized: Neil", "Recognized: Buzz", "Recognized: Sally", "Recognized: Mae"], timeoutMs: 120_000);
+
+            await Task.Delay(runMs);
+
+            Button? stopBtn = UiRetry(w => w.FindFirstDescendant(cf => cf.ByAutomationId("StopButton"))?.AsButton());
+            Assert.That(stopBtn, Is.Not.Null, "StopButton not found");
+            stopBtn!.Invoke();
+            WaitForLogContainsAny(["VisionPipeline stopped", "Meeting session saved:"], timeoutMs: 180_000);
+        }
+
+        // First run uses the seeded identity DB from AppTestBase.
+        await RunAndExpectRecognitionOnce(runMs: 6_000);
+
+        // Restart the app WITHOUT seeding again; it must still recognize from the persisted DB.
+        StopApp();
+        StartApp(seedIdentity: false);
+        await Task.Delay(700);
+
+        await RunAndExpectRecognitionOnce(runMs: 6_000);
+    }
+
     [Test, Order(1)]
     [Category("E2E")]
     public async Task TestFullE2EVideoScenario()
@@ -245,6 +291,7 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
         // Run for 30 seconds of *actual capture* (do not count model load / UI automation time).
         WaitForLogContains("Capture started", timeoutMs: 120_000);
         WaitForLogContainsAny(["Faces detected:"], timeoutMs: 120_000);
+        WaitForLogContainsAny(["Recognized: Neil", "Recognized: Buzz", "Recognized: Sally", "Recognized: Mae"], timeoutMs: 120_000);
 
         TestContext.Out.WriteLine("Running pipeline for 30 seconds stability test (capture-active)...");
         await Task.Delay(30_000);
@@ -298,9 +345,20 @@ public partial class VideoScenarioTests : AppTestBase, IDisposable
             Assert.That(root.TryGetProperty("AudioSpeakerSegments", out JsonElement segs), Is.True);
             Assert.That(segs.GetArrayLength(), Is.GreaterThan(0), "Expected diarization segments in session JSON.");
 
-            Assert.That(root.TryGetProperty("TurnsBySpeaker", out _), Is.True);
-            Assert.That(root.TryGetProperty("ParticipationScoreBySpeaker", out _), Is.True);
-            Assert.That(root.TryGetProperty("ConversationGraph", out _), Is.True);
+            Assert.That(root.TryGetProperty("SpeakingTimeSecondsBySpeaker", out JsonElement speak), Is.True);
+            Assert.That(speak.EnumerateObject().Any(p => p.Value.GetDouble() > 0.1), Is.True, "Expected at least one speaker with >0 speaking time.");
+
+            Assert.That(root.TryGetProperty("TurnsBySpeaker", out JsonElement turns), Is.True);
+            Assert.That(turns.EnumerateObject().Any(p => p.Value.GetInt32() > 0), Is.True, "Expected at least one speaker turn.");
+
+            Assert.That(root.TryGetProperty("ParticipationScoreBySpeaker", out JsonElement part), Is.True);
+            Assert.That(part.EnumerateObject().Any(), Is.True, "Expected participation scores.");
+
+            Assert.That(root.TryGetProperty("ConversationGraph", out JsonElement graph), Is.True);
+            Assert.That(graph.ValueKind, Is.EqualTo(JsonValueKind.Array));
+
+            Assert.That(root.TryGetProperty("EmotionSamples", out JsonElement emo), Is.True);
+            Assert.That(emo.ValueKind, Is.EqualTo(JsonValueKind.Array));
         });
     }
 #pragma warning restore CA1707

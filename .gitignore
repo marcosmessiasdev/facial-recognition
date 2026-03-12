@@ -41,3 +41,4 @@ Thumbs.db
 *_wpftmp.csproj
 build.txt
 build_errors.txt
+tmp_*.txt

@@ -27,7 +27,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\\..\\src\\Audio\\AudioProcessing\\AudioProcessing.csproj" />
+    <ProjectReference Include="..\\..\\src\\Audio\\SpeakerDiarization\\SpeakerDiarization.csproj" />
     <ProjectReference Include="..\\..\\src\\Speech\\SpeechProcessing.csproj" />
+    <ProjectReference Include="..\\..\\src\\Vision\\FaceRecognition\\FaceRecognition.csproj" />
+    <ProjectReference Include="..\\..\\src\\Identity\\IdentityStore.csproj" />
+    <ProjectReference Include="..\\..\\src\\Vision\\FaceDetection\\FaceDetection.csproj" />
   </ItemGroup>
 
   <ItemGroup>

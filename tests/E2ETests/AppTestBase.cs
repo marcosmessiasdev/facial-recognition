@@ -14,9 +14,12 @@ namespace E2ETests;
 public abstract class AppTestBase
 {
     private static int s_appBuilt;
+
+#pragma warning disable NUnit1032 // Disposal is handled by [OneTimeTearDown] (CloseApp) and by explicit StopApp() in restart tests.
     private UIA3Automation? _automation;
 
     protected Application? App { get; private set; }
+#pragma warning restore NUnit1032
     protected UIA3Automation Automation => _automation ?? throw new InvalidOperationException("Automation is not initialized yet.");
     protected Window? MainWindow { get; private set; }
 
@@ -133,10 +136,36 @@ public abstract class AppTestBase
     [OneTimeSetUp]
     public void LaunchApp()
     {
+        StartApp(seedIdentity: true);
+    }
+
+    protected void StartApp(bool seedIdentity, string? audioTestFileOverride = null)
+    {
         string repoRoot = FindRepoRoot(TestContext.CurrentContext.TestDirectory);
         if (Interlocked.CompareExchange(ref s_appBuilt, 1, 0) == 0)
         {
             BuildApp(repoRoot);
+        }
+
+        // Seed a deterministic identity DB in the app working directory so E2E can validate recognition.
+        // Can be disabled by setting E2E_SEED_IDENTITY=false.
+        string identityDb = Path.Combine(TestContext.CurrentContext.TestDirectory, "identity.db");
+        Environment.SetEnvironmentVariable("identity_db", identityDb);
+
+        if (seedIdentity)
+        {
+            string? seed = Environment.GetEnvironmentVariable("E2E_SEED_IDENTITY");
+            bool doSeed = !string.Equals(seed, "false", StringComparison.OrdinalIgnoreCase) &&
+                          !string.Equals(seed, "0", StringComparison.OrdinalIgnoreCase);
+            if (doSeed)
+            {
+                string arcface = Path.Combine(repoRoot, "src", "App", "bin", "Debug", "net8.0-windows10.0.19041.0", "onnx", "arcface.onnx");
+                string scrfd = Path.Combine(repoRoot, "src", "App", "bin", "Debug", "net8.0-windows10.0.19041.0", "onnx", "scrfd_2.5g_kps.onnx");
+                if (File.Exists(arcface) && File.Exists(scrfd))
+                {
+                    IdentitySeed.SeedIdentityDb(TestContext.CurrentContext.TestDirectory, scrfd, arcface);
+                }
+            }
         }
 
         // Re-evaluate at runtime: build happens in OneTimeSetUp, so the exe might not exist during static init.
@@ -166,7 +195,8 @@ public abstract class AppTestBase
 
         // Default E2E configuration (offline + deterministic audio injection).
         // These can be overridden by environment variables already set on the machine.
-        string testAudio = Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "e2e_fixture_10_words.wav");
+        string testAudio = audioTestFileOverride ??
+                           Path.Combine(TestContext.CurrentContext.TestDirectory, "audio", "e2e_fixture_10_words.wav");
 
         ProcessStartInfo psi = new(exePath)
         {
@@ -256,6 +286,18 @@ public abstract class AppTestBase
             psi.EnvironmentVariables["transcription_language"] = "en";
         }
 
+        // Make recognition less brittle across small crop/alignment differences in the offline fixture.
+        if (Environment.GetEnvironmentVariable("recognition_threshold") == null)
+        {
+            psi.EnvironmentVariables["recognition_threshold"] = "0.30";
+        }
+
+        // Ensure the app reads/writes identity DB to the deterministic E2E location.
+        if (Environment.GetEnvironmentVariable("identity_db") != null)
+        {
+            psi.EnvironmentVariables["identity_db"] = Environment.GetEnvironmentVariable("identity_db")!;
+        }
+
         App = Application.Launch(psi);
         _ = App.WaitWhileMainHandleIsMissing(TimeSpan.FromSeconds(10));
 
@@ -266,9 +308,18 @@ public abstract class AppTestBase
     [OneTimeTearDown]
     public void CloseApp()
     {
+        StopApp();
+    }
+
+    protected void StopApp()
+    {
         try { _ = (App?.Close()); } catch { /* ignore */ }
-        App?.Dispose();
-        _automation?.Dispose();
+        try { App?.Dispose(); } catch { /* ignore */ }
+        App = null;
+        MainWindow = null;
+
+        try { _automation?.Dispose(); } catch { /* ignore */ }
+        _automation = null;
     }
 
     protected static string ReadLatestLog()
